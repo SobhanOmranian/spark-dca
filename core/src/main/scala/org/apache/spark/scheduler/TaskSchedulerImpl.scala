@@ -18,12 +18,12 @@
 package org.apache.spark.scheduler
 
 import java.nio.ByteBuffer
-import java.util.{Locale, Timer, TimerTask}
+import java.util.{ Locale, Timer, TimerTask }
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 import scala.collection.Set
-import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
+import scala.collection.mutable.{ ArrayBuffer, HashMap, HashSet }
 import scala.util.Random
 
 import org.apache.spark._
@@ -34,7 +34,7 @@ import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
 import org.apache.spark.scheduler.TaskLocality.TaskLocality
 import org.apache.spark.scheduler.local.LocalSchedulerBackend
 import org.apache.spark.storage.BlockManagerId
-import org.apache.spark.util.{AccumulatorV2, ThreadUtils, Utils}
+import org.apache.spark.util.{ AccumulatorV2, ThreadUtils, Utils }
 
 /**
  * Schedules tasks for multiple types of clusters by acting through a SchedulerBackend.
@@ -51,11 +51,11 @@ import org.apache.spark.util.{AccumulatorV2, ThreadUtils, Utils}
  * acquire a lock on us, so we need to make sure that we don't try to lock the backend while
  * we are holding a lock on ourselves.
  */
-private[spark] class TaskSchedulerImpl private[scheduler](
-    val sc: SparkContext,
-    val maxTaskFailures: Int,
-    private[scheduler] val blacklistTrackerOpt: Option[BlacklistTracker],
-    isLocal: Boolean = false)
+private[spark] class TaskSchedulerImpl private[scheduler] (
+  val sc:                                     SparkContext,
+  val maxTaskFailures:                        Int,
+  private[scheduler] val blacklistTrackerOpt: Option[BlacklistTracker],
+  isLocal:                                    Boolean                  = false)
   extends TaskScheduler with Logging {
 
   import TaskSchedulerImpl._
@@ -161,7 +161,7 @@ private[spark] class TaskSchedulerImpl private[scheduler](
           new FairSchedulableBuilder(rootPool, conf)
         case _ =>
           throw new IllegalArgumentException(s"Unsupported $SCHEDULER_MODE_PROPERTY: " +
-          s"$schedulingMode")
+            s"$schedulingMode")
       }
     }
     schedulableBuilder.buildPools()
@@ -188,19 +188,20 @@ private[spark] class TaskSchedulerImpl private[scheduler](
 
   override def submitTasks(taskSet: TaskSet) {
     val tasks = taskSet.tasks
-    logInfo("Adding task set " + taskSet.id + " with " + tasks.length + " tasks")
+    logInfo("Adding task set " + taskSet.id + " with " + tasks.length + " tasks and IO : " + taskSet.isIo)
     this.synchronized {
       val manager = createTaskSetManager(taskSet, maxTaskFailures)
       val stage = taskSet.stageId
       val stageTaskSets =
         taskSetsByStageIdAndAttempt.getOrElseUpdate(stage, new HashMap[Int, TaskSetManager])
       stageTaskSets(taskSet.stageAttemptId) = manager
-      val conflictingTaskSet = stageTaskSets.exists { case (_, ts) =>
-        ts.taskSet != taskSet && !ts.isZombie
+      val conflictingTaskSet = stageTaskSets.exists {
+        case (_, ts) =>
+          ts.taskSet != taskSet && !ts.isZombie
       }
       if (conflictingTaskSet) {
         throw new IllegalStateException(s"more than one active taskSet for stage $stage:" +
-          s" ${stageTaskSets.toSeq.map{_._2.taskSet.id}.mkString(",")}")
+          s" ${stageTaskSets.toSeq.map { _._2.taskSet.id }.mkString(",")}")
       }
       schedulableBuilder.addTaskSetManager(manager, manager.taskSet.properties)
 
@@ -224,27 +225,28 @@ private[spark] class TaskSchedulerImpl private[scheduler](
 
   // Label as private[scheduler] to allow tests to swap in different task set managers if necessary
   private[scheduler] def createTaskSetManager(
-      taskSet: TaskSet,
-      maxTaskFailures: Int): TaskSetManager = {
+    taskSet:         TaskSet,
+    maxTaskFailures: Int): TaskSetManager = {
     new TaskSetManager(this, taskSet, maxTaskFailures, blacklistTrackerOpt)
   }
 
   override def cancelTasks(stageId: Int, interruptThread: Boolean): Unit = synchronized {
     logInfo("Cancelling stage " + stageId)
     taskSetsByStageIdAndAttempt.get(stageId).foreach { attempts =>
-      attempts.foreach { case (_, tsm) =>
-        // There are two possible cases here:
-        // 1. The task set manager has been created and some tasks have been scheduled.
-        //    In this case, send a kill signal to the executors to kill the task and then abort
-        //    the stage.
-        // 2. The task set manager has been created but no tasks has been scheduled. In this case,
-        //    simply abort the stage.
-        tsm.runningTasksSet.foreach { tid =>
-          val execId = taskIdToExecutorId(tid)
-          backend.killTask(tid, execId, interruptThread, reason = "stage cancelled")
-        }
-        tsm.abort("Stage %s cancelled".format(stageId))
-        logInfo("Stage %d was cancelled".format(stageId))
+      attempts.foreach {
+        case (_, tsm) =>
+          // There are two possible cases here:
+          // 1. The task set manager has been created and some tasks have been scheduled.
+          //    In this case, send a kill signal to the executors to kill the task and then abort
+          //    the stage.
+          // 2. The task set manager has been created but no tasks has been scheduled. In this case,
+          //    simply abort the stage.
+          tsm.runningTasksSet.foreach { tid =>
+            val execId = taskIdToExecutorId(tid)
+            backend.killTask(tid, execId, interruptThread, reason = "stage cancelled")
+          }
+          tsm.abort("Stage %s cancelled".format(stageId))
+          logInfo("Stage %d was cancelled".format(stageId))
       }
     }
   }
@@ -279,11 +281,11 @@ private[spark] class TaskSchedulerImpl private[scheduler](
   }
 
   private def resourceOfferSingleTaskSet(
-      taskSet: TaskSetManager,
-      maxLocality: TaskLocality,
-      shuffledOffers: Seq[WorkerOffer],
-      availableCpus: Array[Int],
-      tasks: IndexedSeq[ArrayBuffer[TaskDescription]]) : Boolean = {
+    taskSet:        TaskSetManager,
+    maxLocality:    TaskLocality,
+    shuffledOffers: Seq[WorkerOffer],
+    availableCpus:  Array[Int],
+    tasks:          IndexedSeq[ArrayBuffer[TaskDescription]], isIo: Boolean = false): Boolean = {
     var launchedTask = false
     // nodes and executors that are blacklisted for the entire application have already been
     // filtered out by this point
@@ -293,6 +295,7 @@ private[spark] class TaskSchedulerImpl private[scheduler](
       if (availableCpus(i) >= CPUS_PER_TASK) {
         try {
           for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
+            task.isIo = isIo;
             tasks(i) += task
             val tid = task.taskId
             taskIdToTaskSetManager(tid) = taskSet
@@ -314,6 +317,9 @@ private[spark] class TaskSchedulerImpl private[scheduler](
     return launchedTask
   }
 
+  var currentStageId = -1;
+  val isUpdateSchedulerEnabled = Option(System.getenv("SPARK_DCA_UPDATE_SCHEDULER")).getOrElse("0").toInt
+  val adaptiveThreadPool = Option(System.getenv("SPARK_ADAPTIVE_THREADPOOL")).getOrElse("0").toInt
   /**
    * Called by cluster manager to offer resources on slaves. We respond by asking our active task
    * sets for tasks in order of priority. We fill each node with tasks in a round-robin manner so
@@ -351,10 +357,9 @@ private[spark] class TaskSchedulerImpl private[scheduler](
       }
     }.getOrElse(offers)
 
-    val shuffledOffers = shuffleOffers(filteredOffers)
-    // Build a list of tasks to assign to each worker.
-    val tasks = shuffledOffers.map(o => new ArrayBuffer[TaskDescription](o.cores))
-    val availableCpus = shuffledOffers.map(o => o.cores).toArray
+    val ioParallelism = Option(System.getenv("SPARK_DCA_PARALLELISM")).getOrElse("0").toInt
+    val staticDca = Option(System.getenv("SPARK_DCA_STATIC")).getOrElse("0").toInt
+    var isIo = false;
     val sortedTaskSets = rootPool.getSortedTaskSetQueue
     for (taskSet <- sortedTaskSets) {
       logDebug("parentName: %s, name: %s, runningTasks: %s".format(
@@ -362,7 +367,67 @@ private[spark] class TaskSchedulerImpl private[scheduler](
       if (newExecAvail) {
         taskSet.executorAdded()
       }
+
+      if (isUpdateSchedulerEnabled == 1) {
+
+        if (staticDca == 1) {
+          if (taskSet.taskSet.isIo) {
+            isIo = true
+          }
+          if (taskSet.stageId != currentStageId) {
+            currentStageId = taskSet.stageId
+            logInfo(s"[CRITICAL] Stage change detected in TaskScheudlerImp!")
+            
+            if (isIo) {
+              if (adaptiveThreadPool >= 11 && adaptiveThreadPool <= 19) {    
+                logInfo(s"[CRITICAL] Stage is IO so I will try to tune!")
+                logInfo(s"Ascending Adaptive Tuner, so I will change all the offers to 2 number of cores.")
+                filteredOffers.map(s => s.cores = 2);
+              }       
+            }
+            else {
+//              logInfo(s"[CRITICAL] Stage is NOT IO so I will reset the number of Cores!")
+//              backend.executorDataMap
+            }
+          }
+        } 
+        
+        // Not static
+        else {
+
+          if (taskSet.stageId != currentStageId) {
+            currentStageId = taskSet.stageId
+            if (adaptiveThreadPool >= 11 && adaptiveThreadPool <= 19) {
+              logInfo(s"[CRITICAL] Stage change detected in TaskScheudlerImp!. Setting all the cores to minimum")
+              logInfo(s"Ascending Adaptive Tuner, so I will change all the offers to 2 number of cores.")
+              filteredOffers.map(s => s.cores = 2);
+            }
+
+          }
+
+        }
+      }
+
+      //      if (taskSet.taskSet.isIo) {
+      //        logInfo(s"[Custom] taskset ${taskSet.taskSet.id} is IO.")
+      //        filteredOffers.map(s =>
+      //          if (s.totalCores == 0) {
+      //            logError(s"Offer from executor ${s.executorId} does not have total cores information.")
+      //          } else if (s.cores + ioParallelism <= s.totalCores) {
+      //            logInfo(s"Offer from executor ${s.executorId} with [${s.cores}] cores is set to 0 since it is already running $ioParallelism task(s).")
+      //            s.cores = 0
+      //          } else {
+      //            logInfo(s"Offer from executor ${s.executorId} with [${s.cores}] cores is set to $ioParallelism cores.")
+      //            s.cores = ioParallelism
+      //          })
+      //      }
     }
+
+    val shuffledOffers = shuffleOffers(filteredOffers)
+    // Build a list of tasks to assign to each worker.
+    var tasks = shuffledOffers.map(o => new ArrayBuffer[TaskDescription](o.cores))
+
+    val availableCpus = shuffledOffers.map(o => o.cores).toArray
 
     // Take each TaskSet in our scheduling order, and then offer it each node in increasing order
     // of locality levels so that it gets a chance to launch local tasks on all of them.
@@ -372,8 +437,9 @@ private[spark] class TaskSchedulerImpl private[scheduler](
       var launchedTaskAtCurrentMaxLocality = false
       for (currentMaxLocality <- taskSet.myLocalityLevels) {
         do {
+//          logInfo(s"[CRITICAL] IS IO: $isIo")
           launchedTaskAtCurrentMaxLocality = resourceOfferSingleTaskSet(
-            taskSet, currentMaxLocality, shuffledOffers, availableCpus, tasks)
+            taskSet, currentMaxLocality, shuffledOffers, availableCpus, tasks, isIo)
           launchedAnyTask |= launchedTaskAtCurrentMaxLocality
         } while (launchedTaskAtCurrentMaxLocality)
       }
@@ -449,16 +515,17 @@ private[spark] class TaskSchedulerImpl private[scheduler](
    * indicating that the block manager should re-register.
    */
   override def executorHeartbeatReceived(
-      execId: String,
-      accumUpdates: Array[(Long, Seq[AccumulatorV2[_, _]])],
-      blockManagerId: BlockManagerId): Boolean = {
+    execId:         String,
+    accumUpdates:   Array[(Long, Seq[AccumulatorV2[_, _]])],
+    blockManagerId: BlockManagerId): Boolean = {
     // (taskId, stageId, stageAttemptId, accumUpdates)
     val accumUpdatesWithTaskIds: Array[(Long, Int, Int, Seq[AccumulableInfo])] = synchronized {
-      accumUpdates.flatMap { case (id, updates) =>
-        val accInfos = updates.map(acc => acc.toInfo(Some(acc.value), None))
-        taskIdToTaskSetManager.get(id).map { taskSetMgr =>
-          (id, taskSetMgr.stageId, taskSetMgr.taskSet.stageAttemptId, accInfos)
-        }
+      accumUpdates.flatMap {
+        case (id, updates) =>
+          val accInfos = updates.map(acc => acc.toInfo(Some(acc.value), None))
+          taskIdToTaskSetManager.get(id).map { taskSetMgr =>
+            (id, taskSetMgr.stageId, taskSetMgr.taskSet.stageAttemptId, accInfos)
+          }
       }
     }
     dagScheduler.executorHeartbeatReceived(execId, accumUpdatesWithTaskIds, blockManagerId)
@@ -469,17 +536,17 @@ private[spark] class TaskSchedulerImpl private[scheduler](
   }
 
   def handleSuccessfulTask(
-      taskSetManager: TaskSetManager,
-      tid: Long,
-      taskResult: DirectTaskResult[_]): Unit = synchronized {
+    taskSetManager: TaskSetManager,
+    tid:            Long,
+    taskResult:     DirectTaskResult[_]): Unit = synchronized {
     taskSetManager.handleSuccessfulTask(tid, taskResult)
   }
 
   def handleFailedTask(
-      taskSetManager: TaskSetManager,
-      tid: Long,
-      taskState: TaskState,
-      reason: TaskFailedReason): Unit = synchronized {
+    taskSetManager: TaskSetManager,
+    tid:            Long,
+    taskState:      TaskState,
+    reason:         TaskFailedReason): Unit = synchronized {
     taskSetManager.handleFailedTask(tid, taskState, reason)
     if (!taskSetManager.isZombie && !taskSetManager.someAttemptSucceeded(tid)) {
       // Need to revive offers again now that the task set manager state has been updated to
@@ -570,9 +637,9 @@ private[spark] class TaskSchedulerImpl private[scheduler](
   }
 
   private def logExecutorLoss(
-      executorId: String,
-      hostPort: String,
-      reason: ExecutorLossReason): Unit = reason match {
+    executorId: String,
+    hostPort:   String,
+    reason:     ExecutorLossReason): Unit = reason match {
     case LossReasonPending =>
       logDebug(s"Executor $executorId on $hostPort lost, but reason not yet known.")
     case ExecutorKilled =>
@@ -683,8 +750,8 @@ private[spark] class TaskSchedulerImpl private[scheduler](
   override def applicationAttemptId(): Option[String] = backend.applicationAttemptId()
 
   private[scheduler] def taskSetManagerForAttempt(
-      stageId: Int,
-      stageAttemptId: Int): Option[TaskSetManager] = {
+    stageId:        Int,
+    stageAttemptId: Int): Option[TaskSetManager] = {
     for {
       attempts <- taskSetsByStageIdAndAttempt.get(stageId)
       manager <- attempts.get(stageAttemptId)
@@ -702,16 +769,15 @@ private[spark] class TaskSchedulerImpl private[scheduler](
    * attempt can lead to the entire stage getting marked as successful.
    */
   private[scheduler] def markPartitionCompletedInAllTaskSets(
-      stageId: Int,
-      partitionId: Int,
-      taskInfo: TaskInfo) = {
+    stageId:     Int,
+    partitionId: Int,
+    taskInfo:    TaskInfo) = {
     taskSetsByStageIdAndAttempt.getOrElse(stageId, Map()).values.foreach { tsm =>
       tsm.markPartitionCompleted(partitionId, taskInfo)
     }
   }
 
 }
-
 
 private[spark] object TaskSchedulerImpl {
 
@@ -728,14 +794,13 @@ private[spark] object TaskSchedulerImpl {
    * For example, given {@literal <h1, [o1, o2, o3]>}, {@literal <h2, [o4]>} and
    * {@literal <h3, [o5, o6]>}, returns {@literal [o1, o5, o4, o2, o6, o3]}.
    */
-  def prioritizeContainers[K, T] (map: HashMap[K, ArrayBuffer[T]]): List[T] = {
+  def prioritizeContainers[K, T](map: HashMap[K, ArrayBuffer[T]]): List[T] = {
     val _keyList = new ArrayBuffer[K](map.size)
     _keyList ++= map.keys
 
     // order keyList based on population of value in map
     val keyList = _keyList.sortWith(
-      (left, right) => map(left).size > map(right).size
-    )
+      (left, right) => map(left).size > map(right).size)
 
     val retval = new ArrayBuffer[T](keyList.size * 2)
     var index = 0
@@ -762,7 +827,7 @@ private[spark] object TaskSchedulerImpl {
     if (BlacklistTracker.isBlacklistEnabled(sc.conf)) {
       val executorAllocClient: Option[ExecutorAllocationClient] = sc.schedulerBackend match {
         case b: ExecutorAllocationClient => Some(b)
-        case _ => None
+        case _                           => None
       }
       Some(new BlacklistTracker(sc, executorAllocClient))
     } else {

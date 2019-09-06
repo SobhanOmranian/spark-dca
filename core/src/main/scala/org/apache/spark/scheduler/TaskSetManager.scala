@@ -107,7 +107,7 @@ private[spark] class TaskSetManager(
 
   override def runningTasks: Int = runningTasksSet.size
 
-  def someAttemptSucceeded(tid: Long): Boolean = {
+  def someAttemptSucceeded(tid: Long): Boolean = { 
     successful(taskInfos(tid).index)
   }
 
@@ -502,6 +502,7 @@ private[spark] class TaskSetManager(
           s"partition ${task.partitionId}, $taskLocality, ${serializedTask.limit} bytes)")
 
         sched.dagScheduler.taskStarted(task, info)
+        
         new TaskDescription(
           taskId,
           attemptNum,
@@ -511,7 +512,9 @@ private[spark] class TaskSetManager(
           addedFiles,
           addedJars,
           task.localProperties,
-          serializedTask)
+          serializedTask,
+          taskSet.stageId,
+          sched.sc.applicationId)
       }
     } else {
       None

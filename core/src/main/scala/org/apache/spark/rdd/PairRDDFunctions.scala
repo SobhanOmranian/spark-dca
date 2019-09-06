@@ -1001,6 +1001,7 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
     val jobConfiguration = job.getConfiguration
     jobConfiguration.set("mapreduce.output.fileoutputformat.outputdir", path)
     saveAsNewAPIHadoopDataset(jobConfiguration)
+    
   }
 
   /**
@@ -1013,6 +1014,7 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
       valueClass: Class[_],
       outputFormatClass: Class[_ <: OutputFormat[_, _]],
       codec: Class[_ <: CompressionCodec]): Unit = self.withScope {
+    self.isThisIo = true
     saveAsHadoopFile(path, keyClass, valueClass, outputFormatClass,
       new JobConf(self.context.hadoopConfiguration), Some(codec))
   }

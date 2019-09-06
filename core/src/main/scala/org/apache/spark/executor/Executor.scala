@@ -17,31 +17,35 @@
 
 package org.apache.spark.executor
 
-import java.io.{File, NotSerializableException}
+import java.io.{ File, NotSerializableException }
 import java.lang.Thread.UncaughtExceptionHandler
 import java.lang.management.ManagementFactory
-import java.net.{URI, URL}
+import java.net.{ URI, URL }
 import java.nio.ByteBuffer
 import java.util.Properties
 import java.util.concurrent._
 import javax.annotation.concurrent.GuardedBy
 
 import scala.collection.JavaConverters._
-import scala.collection.mutable.{ArrayBuffer, HashMap, Map}
+import scala.collection.mutable.{ ArrayBuffer, HashMap, Map }
 import scala.util.control.NonFatal
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 
 import org.apache.spark._
+import org.apache.spark.dca.SelfAdaptiveThreadPoolExecutor;
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.rpc.RpcTimeout
-import org.apache.spark.scheduler.{DirectTaskResult, IndirectTaskResult, Task, TaskDescription}
+import org.apache.spark.scheduler.{ DirectTaskResult, IndirectTaskResult, Task, TaskDescription }
 import org.apache.spark.shuffle.FetchFailedException
-import org.apache.spark.storage.{StorageLevel, TaskResultBlockId}
+import org.apache.spark.storage.{ StorageLevel, TaskResultBlockId }
 import org.apache.spark.util._
 import org.apache.spark.util.io.ChunkedByteBuffer
+import org.apache.spark.dca.SelfAdaptiveFixedThreadPoolExecutor
+import org.apache.spark.dca.SelfAdaptiveNoActionPoolExecutor
+import org.apache.spark.dca.SelfAdaptiveStaticThreadPoolExecutor
 
 /**
  * Spark executor, backed by a threadpool to run tasks.
@@ -50,16 +54,20 @@ import org.apache.spark.util.io.ChunkedByteBuffer
  * An internal RPC interface is used for communication with the driver,
  * except in the case of Mesos fine-grained mode.
  */
-private[spark] class Executor(
-    executorId: String,
-    executorHostname: String,
-    env: SparkEnv,
-    userClassPath: Seq[URL] = Nil,
-    isLocal: Boolean = false,
-    uncaughtExceptionHandler: UncaughtExceptionHandler = SparkUncaughtExceptionHandler)
+class Executor(
+  executorId:               String,
+  executorHostname:         String,
+  env:                      SparkEnv,
+  userClassPath:            Seq[URL]                 = Nil,
+  isLocal:                  Boolean                  = false,
+  cores:                    Int,
+  changedCores:             Int,
+  appId:                    String,
+  executorBackEnd:          ExecutorBackend,
+  uncaughtExceptionHandler: UncaughtExceptionHandler = SparkUncaughtExceptionHandler)
   extends Logging {
 
-  logInfo(s"Starting executor ID $executorId on host $executorHostname")
+  logInfo(s"Starting executor ID $executorId on host $executorHostname with $cores threads")
 
   // Application dependencies (added through SparkContext) that we've fetched so far on this node.
   // Each map holds the master's timestamp for the version of that file or JAR we got.
@@ -70,10 +78,12 @@ private[spark] class Executor(
 
   private val conf = env.conf
 
+  //  private var executorBackend: ExecutorBackend = null
+
   // No ip or host:port - just hostname
   Utils.checkHost(executorHostname, "Expected executed slave to be a hostname")
   // must not have port specified.
-  assert (0 == Utils.parseHostPort(executorHostname)._2)
+  assert(0 == Utils.parseHostPort(executorHostname)._2)
 
   // Make sure the local hostname we report matches the cluster scheduler's name for this host
   Utils.setCustomHostname(executorHostname)
@@ -85,22 +95,519 @@ private[spark] class Executor(
     Thread.setDefaultUncaughtExceptionHandler(uncaughtExceptionHandler)
   }
 
-  // Start worker thread pool
-  private val threadPool = {
+  // Count the number of tasks executed by this Executor.
+  private var numberOfLaunchedTasks = 0;
+
+  val adaptiveThreadPool = Option(System.getenv("SPARK_ADAPTIVE_THREADPOOL")).getOrElse("0").toInt
+  println("adaptiveThreadPool: " + adaptiveThreadPool)
+  
+ val originalCores: Int = cores
+  //  val tmpfsEnabled = Option(System.getenv("SPARK_DCA_TMPFS")).getOrElse("0").toInt
+  val tmpfsEnabled = 1
+
+  val attachStraceEnabled = Option(System.getenv("SPARK_DCA_STRACE")).getOrElse("0").toInt
+
+  def getConf(): SparkConf = {
+    return conf;
+  }
+
+  private val threadPoolNoTuning = {
     val threadFactory = new ThreadFactoryBuilder()
       .setDaemon(true)
       .setNameFormat("Executor task launch worker-%d")
       .setThreadFactory(new ThreadFactory {
-        override def newThread(r: Runnable): Thread =
+        override def newThread(r: Runnable): Thread = {
           // Use UninterruptibleThread to run tasks so that we can allow running codes without being
           // interrupted by `Thread.interrupt()`. Some issues, such as KAFKA-1894, HADOOP-10622,
           // will hang forever if some methods are interrupted.
+          //          println("New thread has been created!")
           new UninterruptibleThread(r, "unused") // thread name will be set by ThreadFactoryBuilder
+        }
       })
       .build()
     Executors.newCachedThreadPool(threadFactory).asInstanceOf[ThreadPoolExecutor]
   }
+
+  val staticDca = Option(System.getenv("SPARK_DCA_STATIC")).getOrElse("0").toInt
+  val staticDcaThreadNum = Option(System.getenv("SPARK_DCA_STATIC_THREAD_NUM")).getOrElse("0").toInt
+  // Start worker thread pool
+  private val threadPool = {
+
+    val threadFactory = new ThreadFactoryBuilder()
+      .setDaemon(true)
+      .setNameFormat("Executor task launch worker-%d")
+      .setThreadFactory(new ThreadFactory {
+        override def newThread(r: Runnable): Thread = {
+          // Use UninterruptibleThread to run tasks so that we can allow running codes without being
+          // interrupted by `Thread.interrupt()`. Some issues, such as KAFKA-1894, HADOOP-10622,
+          // will hang forever if some methods are interrupted.
+          //          println("New thread has been created!")
+          new UninterruptibleThread(r, "unused") // thread name will be set by ThreadFactoryBuilder
+        }
+      })
+      .build()
+
+    if (staticDca == 1) {
+        new SelfAdaptiveFixedThreadPoolExecutor(
+            staticDcaThreadNum,
+            staticDcaThreadNum,
+            60L,
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue[Runnable](),
+            threadFactory,
+            adaptiveThreadPool,
+            this)
+            .asInstanceOf[ThreadPoolExecutor]
+    } else {
+      if (adaptiveThreadPool >= 1) {
+        if (adaptiveThreadPool == 100)
+          new SelfAdaptiveNoActionPoolExecutor(
+            0,
+            Int.MaxValue,
+            60L,
+            TimeUnit.SECONDS,
+            new SynchronousQueue[Runnable](),
+            threadFactory,
+            this)
+            .asInstanceOf[ThreadPoolExecutor]
+        else if (adaptiveThreadPool == 101)
+          new SelfAdaptiveStaticThreadPoolExecutor(
+            0,
+            cores,
+            60L,
+            TimeUnit.SECONDS,
+            new SynchronousQueue[Runnable](),
+            threadFactory,
+            this)
+            .asInstanceOf[ThreadPoolExecutor]
+        else
+          new SelfAdaptiveThreadPoolExecutor(
+            cores,
+            cores,
+            changedCores,
+            60L,
+            TimeUnit.SECONDS,
+            //      new SynchronousQueue[Runnable](),
+            new LinkedBlockingQueue[Runnable](),
+            threadFactory,
+            adaptiveThreadPool, this)
+            .asInstanceOf[ThreadPoolExecutor]
+        //    else if (adaptiveThreadPool == 5)
+        //      new ThreadPoolExecutor(8, 8,
+        //        60L, TimeUnit.SECONDS,
+        //        new LinkedBlockingQueue[Runnable](),
+        //        threadFactory);
+      } else
+        Executors.newCachedThreadPool(threadFactory).asInstanceOf[ThreadPoolExecutor]
+    }
+  }
+
+  def sendThreadPoolUpdateMsg(newCoreNum: Int) {
+    //    if (staticDca == 1) {
+    //      if (stageId == 0)
+    //        return
+    //    }
+    if (this.executorBackEnd != null) {
+      logInfo(s"[MSG]: sending new threadpool core [$newCoreNum] from Executor to ExecutorBackend...")
+      this.executorBackEnd.threadpoolUpdate(newCoreNum);
+    }
+  }
+
+  def getPid(): Int = {
+    val runtime = ManagementFactory.getRuntimeMXBean()
+    val jvm = runtime.getClass().getDeclaredField("jvm");
+    jvm.setAccessible(true);
+    val mgmt = jvm.get(runtime).asInstanceOf[sun.management.VMManagement];
+    val pid_method = mgmt.getClass().getDeclaredMethod("getProcessId");
+    pid_method.setAccessible(true);
+
+    val pid = pid_method.invoke(mgmt).asInstanceOf[Int];
+    pid
+  }
+
+  def getAppName(): String = {
+    conf.get("spark.app.name")
+  }
+
+  def getAppId(): String = {
+    appId
+  }
+
+  def getExecutorId(): String = {
+    executorId
+  }
+
+  def writeEpollWait(fileName: String, text: String) {
+    import java.io._
+    val pw = new PrintWriter(new File(fileName))
+    pw.write(text)
+    pw.close
+  }
+
+  def getStracePath: String = {
+
+    var stracePath = ""
+    if (tmpfsEnabled == 1) {
+      stracePath = s"/dev/shm/omranian/log.strace"
+
+    } else {
+      val rootDir = Utils.getConfiguredLocalDirs(conf).mkString(" ");
+      println(s"rootdir => ${Utils.getConfiguredLocalDirs(conf).mkString(" ")}")
+      stracePath = s"$rootDir/log.strace"
+    }
+
+    //    return ""
+    return stracePath
+  }
+
+  def getIoStatPath: String = {
+
+    var ioStatPath = ""
+    if (tmpfsEnabled == 1) {
+      ioStatPath = s"/dev/shm/omranian/iostat.csv"
+
+    } else {
+      val rootDir = Utils.getConfiguredLocalDirs(conf).mkString(" ");
+      println(s"rootdir => ${Utils.getConfiguredLocalDirs(conf).mkString(" ")}")
+      ioStatPath = s"$rootDir/iostat.csv"
+    }
+
+    return ioStatPath
+  }
+
+  def attachVtune() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+
+          val pid = getPid()
+          log.info(s"[VTUNE] attaching vtune...")
+          val r = Seq("/bin/sh", "-c", s"source  /var/scratch/omranian/intel/vtune_amplifier_2019.3.0.590814/amplxe-vars.sh; amplxe-cl -collect memory-access -target-pid $pid >> /home/omranian/results/log.vtune 2>&1");
+          import scala.sys.process._
+          Process(r)!
+
+          //          writeEpollWait(stracePath, "359.99")
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def attachStrace(pid: Int) {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          //          println(s"rootDir: somthing")
+          //          Utils.getConfiguredLocalDirs(conf).flatMap { rootDir =>
+          //
+          //          }
+
+          var stracePath = getStracePath
+
+          //          stracePath = "/home/omranian/log.strace"
+          //          val cmd = s"strace -f -tt -T -e trace=epoll_wait -o $stracePath -p $pid"
+          val cmd = s"strace -f -tt -T -e trace=lseek -o $stracePath -p $pid"
+          //                    val cmd = s"cat /proc/$pid/stat"
+          import scala.sys.process._
+          Process(cmd)!
+
+          //          writeEpollWait(stracePath, "359.99")
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def attachStraceToHdfs() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          log.info(s"[HDFS-Strace] attaching strace to DataNode process...")
+          val r = Seq("/bin/sh", "-c", s"/home/omranian/scripts/strace/attach_strace_to_hdfs.sh");
+          import scala.sys.process._
+          Process(r)!
+
+          //          writeEpollWait(stracePath, "359.99")
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def attachStraceToPythonStdinParser(pid: Int) {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          //          stracePath = "/home/omranian/log.strace"
+          //          val cmd = s"strace -f -tt -T -e trace=epoll_wait -p $pid W| python3 /home/omranian/parser.py"
+
+          //          val cmd = s"strace -f -tt -T -e trace=epoll_wait -p $pid" #| s"python3 /home/omranian/parser.py"
+          //          import scala.sys.process._
+          //          val cmd = s"strace -f -tt -T -e trace=epoll_wait -p $pid 2>&1" #| s"python3 /home/omranian/parser.py"
+
+          val r = Seq("/bin/sh", "-c", s"strace -f -tt -T -e trace=epoll_wait -p $pid 2>&1 | python3 /home/omranian/parser.py");
+
+          import scala.sys.process._
+          Process(r).!
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def attachStraceToPythonFileParser(pid: Int) {
+    val r = new Runnable {
+      override def run() = {
+        try {
+
+          var stracePath = getStracePath
+          val appName = sanitizeString(getAppName())
+          val appId = getAppId()
+          val completeName = q"$appName^$appId"
+
+          val r = Seq("/bin/sh", "-c", s"strace -f -tt -T -e trace=epoll_wait -o $stracePath -p $pid");
+
+          import scala.sys.process._
+          Process(r).!
+
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+
+    val r2 = new Runnable {
+      override def run() = {
+        try {
+
+          var stracePath = getStracePath
+          val appName = sanitizeString(getAppName())
+          val appId = getAppId()
+          val completeName = q"$appName^$appId"
+
+          val r = Seq("/bin/sh", "-c", s"python3 /home/omranian/scripts/straceFileParser/strace_file_parser.py --appName $completeName  --file $stracePath");
+
+          import scala.sys.process._
+          Process(r).!
+
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+
+    new Thread(r).start()
+    new Thread(r2).start()
+  }
+
+  def startIoStat() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          var ioStatPath = getIoStatPath
+
+          //          val cmd = s"/var/scratch/omranian/git/iostat-csv/iostat-csv.sh | tee $ioStatPath > /dev/null &"
+          import scala.sys.process._
+          //          Process(cmd)!
+          val ret = "/var/scratch/omranian/git/iostat-csv/iostat-csv.sh" #| s"tee $ioStatPath > /dev/null &" !
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def stopIoStat() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          val cmd = s"killall iostat"
+          import scala.sys.process._
+          Process(cmd)!
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  implicit class `string quoter`(val sc: StringContext) {
+    def q(args: Any*): String = "\"" + sc.s(args: _*) + "\""
+
+  }
+
+  def sanitizeString(s: String): String = {
+    return s.replace(" ", "_").replace(",", "_").replace("(", "_").replace(")", "_").replace("/", "_")
+  }
+
+  def startPio(outputFileNameArg: String) {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          var outputFileName = sanitizeString(outputFileNameArg)
+          val pid = getPid()
+          val appName = sanitizeString(getAppName())
+          val appId = getAppId()
+          val completeName = q"$appName^$appId"
+          val execId = getExecutorId()
+          log.info(s"[PIO] Starting pio on process [$pid], output file name: $outputFileName");
+
+          val r = Seq("/bin/sh", "-c", s"/home/omranian/scripts/io-activity/pio_executor_hdfs.sh $pid $outputFileName $completeName $execId");
+
+          import scala.sys.process._
+          Process(r).!
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def startMpstat() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          val appName = sanitizeString(getAppName())
+          val appId = getAppId()
+          val completeName = q"$appName^$appId"
+          val execId = getExecutorId()
+          log.info(s"[MPSTAT] Starting mpstat 1, output file name: $completeName");
+
+          val r = Seq("/bin/sh", "-c", s"mpstat 1 | python3 /home/omranian/scripts/mpstat/parse-mpstat-output.py -e $execId -a $completeName -f $completeName");
+
+          import scala.sys.process._
+          Process(r).!
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def startIoStatMonitoring() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          val appName = sanitizeString(getAppName())
+          val appId = getAppId()
+          val completeName = q"$appName^$appId"
+          log.info(s"[IOSTAT(M)] Starting iostat, output file name: $completeName");
+
+          val r = Seq("/bin/sh", "-c", s"iostat -c -d -t -x -y 1 | awk -f /home/omranian/scripts/iostat/buffer.awk | python3 /home/omranian/scripts/iostat/parse-iostat-output.py -a $completeName -f $completeName");
+
+          import scala.sys.process._
+          Process(r).!
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def startTop() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          val appName = sanitizeString(getAppName())
+          val appId = getAppId()
+          val completeName = q"$appName^$appId"
+          val execId = getExecutorId()
+          log.info(s"[TOP] Starting top, output file name: $completeName");
+
+          val pid = getPid()
+
+          val r = Seq("/bin/sh", "-c", s"top -b  -c -p $pid | python3 /home/omranian/scripts/top/parse-top-output.py -e $execId -a $completeName -f $completeName");
+
+          import scala.sys.process._
+          Process(r).!
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+  }
+
+  def startMemStall() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          val appName = sanitizeString(getAppName())
+          val appId = getAppId()
+          val completeName = q"$appName^$appId"
+          log.info(s"[MEM-STALL] Starting perf for memeory stalls, output file name: $completeName");
+
+          val pid = getPid()
+          val perfEvents = "cycle_activity.cycles_no_execute,cycle_activity.stalls_ldm_pending,CPU_CLK_UNHALTED.REF_TSC"
+          val r = Seq("/bin/sh", "-c", s"perf stat -I 1000 -x,  -a  -e  $perfEvents -p $pid 2>&1 | python3 /home/omranian/scripts/memstall/parse-memstall-output.py -a $completeName -f $completeName");
+
+          import scala.sys.process._
+          Process(r).!
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  def startIoTop() {
+    val r = new Runnable {
+      override def run() = {
+        try {
+          var ioStatPath = getIoStatPath
+
+          //          val cmd = s"/var/scratch/omranian/git/iostat-csv/iostat-csv.sh | tee $ioStatPath > /dev/null &"
+          import scala.sys.process._
+          //          Process(cmd)!
+          val ret = "/var/scratch/omranian/git/iostat-csv/iostat-csv.sh" #| s"tee $ioStatPath > /dev/null &" !
+        } catch {
+          case t: Throwable => t.printStackTrace() // TODO: handle error
+        }
+      }
+    }
+    new Thread(r).start()
+
+  }
+
+  //  if (adaptiveThreadPool >= 1 && (adaptiveThreadPool != 100 || adaptiveThreadPool != 99)) {
+
+  //  if (attachStraceEnabled == 1) {
+  //    val pid = getPid()
+  //    attachStrace(pid);
+  //  }
+
+  if (getIoStatPath != "") {
+    println(s"Starting iostat...")
+    startIoStat();
+  }
+  //  }
+
   private val executorSource = new ExecutorSource(threadPool, executorId)
+  private val executorSourceNoTuning = new ExecutorSource(threadPoolNoTuning, executorId)
   // Pool used for threads that supervise task killing / cancellation
   private val taskReaperPool = ThreadUtils.newDaemonCachedThreadPool("Task reaper")
   // For tasks which are in the process of being killed, this map holds the most recently created
@@ -114,6 +621,8 @@ private[spark] class Executor(
 
   if (!isLocal) {
     env.metricsSystem.registerSource(executorSource)
+    if(staticDca == 1)
+        env.metricsSystem.registerSource(executorSourceNoTuning)
     env.blockManager.initialize(conf.getAppId)
   }
 
@@ -170,10 +679,47 @@ private[spark] class Executor(
 
   private[executor] def numRunningTasks: Int = runningTasks.size()
 
+  var stageId: Int = -1
+  var isCurrentStageIo: Boolean = false
+
   def launchTask(context: ExecutorBackend, taskDescription: TaskDescription): Unit = {
+    //    numberOfLaunchedTasks += 1;
+    //    val ioParallelism = Option(System.getenv("SPARK_DCA_PARALLELISM")).getOrElse("0").toInt
+    ////    println(s"number of launched tasks: $numberOfLaunchedTasks")
+    //    if(numberOfLaunchedTasks % ioParallelism == 0){
+    //      taskDescription.shouldOptimise = true;
+    //      println(s"Setting task [${taskDescription.taskId}] should optimise to true");
+    //    }
     val tr = new TaskRunner(context, taskDescription)
     runningTasks.put(taskDescription.taskId, tr)
-    threadPool.execute(tr)
+    isCurrentStageIo = taskDescription.isIo
+
+    if (staticDca == 1) {
+      if (stageId != taskDescription.stageId) {
+        logInfo("[CRITICAL] Stage change detected in Executor!")
+        stageId = taskDescription.stageId
+        if (!taskDescription.isIo) {
+          logInfo("[CRITICAL] Resetting the number of cores since it is not an IO phase!")
+          sendThreadPoolUpdateMsg(32)
+          logInfo("[CRITICAL] Saving DCA results for this non-io stage!")
+          (threadPool.asInstanceOf[SelfAdaptiveFixedThreadPoolExecutor]).saveDca(stageId)
+        }
+        else {
+          logInfo(s"[CRITICAL] Setting the number of cores in scheduler to $staticDcaThreadNum since it is an IO phase!")
+          sendThreadPoolUpdateMsg(staticDcaThreadNum)
+        }
+      }
+
+      if (taskDescription.isIo) {
+
+        threadPool.execute(tr)
+      } else
+        threadPoolNoTuning.execute(tr)
+
+    } else {
+      threadPool.execute(tr)
+    }
+
   }
 
   def killTask(taskId: Long, interruptThread: Boolean, reason: String): Unit = {
@@ -182,7 +728,7 @@ private[spark] class Executor(
       if (taskReaperEnabled) {
         val maybeNewTaskReaper: Option[TaskReaper] = taskReaperForTask.synchronized {
           val shouldCreateReaper = taskReaperForTask.get(taskId) match {
-            case None => true
+            case None                 => true
             case Some(existingReaper) => interruptThread && !existingReaper.interruptThread
           }
           if (shouldCreateReaper) {
@@ -208,7 +754,7 @@ private[spark] class Executor(
    * tasks instead of taking the JVM down.
    * @param interruptThread whether to interrupt the task thread
    */
-  def killAllTasks(interruptThread: Boolean, reason: String) : Unit = {
+  def killAllTasks(interruptThread: Boolean, reason: String): Unit = {
     runningTasks.keys().asScala.foreach(t =>
       killTask(t, interruptThread = interruptThread, reason = reason))
   }
@@ -218,6 +764,8 @@ private[spark] class Executor(
     heartbeater.shutdown()
     heartbeater.awaitTermination(10, TimeUnit.SECONDS)
     threadPool.shutdown()
+    threadPoolNoTuning.shutdown()
+    stopIoStat()
     if (!isLocal) {
       env.stop()
     }
@@ -229,10 +777,14 @@ private[spark] class Executor(
   }
 
   class TaskRunner(
-      execBackend: ExecutorBackend,
-      private val taskDescription: TaskDescription)
+    execBackend:                 ExecutorBackend,
+    private val taskDescription: TaskDescription)
     extends Runnable {
 
+    //    if (executorBackend == null)
+    //      executorBackend = execBackend;
+
+    var taskStart: Long = 0
     val taskId = taskDescription.taskId
     val threadName = s"Executor task launch worker for task $taskId"
     private val taskName = taskDescription.name
@@ -271,6 +823,124 @@ private[spark] class Executor(
       }
     }
 
+    //    def getStracePath(): String = {
+    //      val rootDir = Utils.getConfiguredLocalDirs(conf).mkString(" ");
+    //      val stracePath = s"$rootDir/log.strace"
+    //      stracePath
+    //    }
+    //
+    //    def getIoStatPath(): String = {
+    //      val rootDir = Utils.getConfiguredLocalDirs(conf).mkString(" ");
+    //      val stracePath = s"$rootDir/iostat.csv"
+    //      stracePath
+    //
+    //    }
+
+    def getAppName(): String = {
+      conf.get("spark.app.name")
+    }
+
+    def getAppId(): String = {
+      taskDescription.applicationId
+    }
+
+    def getExecutorId(): String = {
+      executorId
+    }
+
+    def getStageId(): Int = {
+      taskDescription.stageId
+    }
+
+    def getStartTime(): Long = {
+      taskStart
+    }
+
+    def getCurrentExecutionTime(): Long = {
+      System.currentTimeMillis() - taskStart
+    }
+
+    def getExecutorRunTime(): Long = {
+      task.metrics.executorRunTime
+    }
+
+    def getMetrics(): TaskMetrics = {
+      task.metrics
+    }
+
+    def isTaskIo(): Boolean = {
+      taskDescription.isIo
+    }
+
+    def getBytesRead(): Long = {
+      try {
+        task.metrics.inputMetrics.bytesRead
+      } catch {
+        case t: Exception => return 0
+      }
+    }
+
+    def getBytesReadAll(): Long = {
+      var result = 0L
+      try {
+        result += task.metrics.inputMetrics.bytesRead
+      } catch {
+        case t: Exception => result += 0L
+      }
+      try {
+        result += task.metrics.shuffleReadMetrics.localBytesRead
+      } catch {
+        case t: Exception => result += 0L
+      }
+      try {
+        result += task.metrics.shuffleReadMetrics.remoteBytesRead
+      } catch {
+        case t: Exception => result += 0L
+      }
+      return result
+    }
+
+    def getBytesWrittenAll(): Long = {
+      var result = 0L
+      try {
+        result += task.metrics.outputMetrics.bytesWritten
+      } catch {
+        case t: Exception => result += 0L
+      }
+      try {
+        result += task.metrics.shuffleWriteMetrics.bytesWritten
+      } catch {
+        case t: Exception => result += 0L
+      }
+      return result
+    }
+
+    def getBytesWritten(): Long = {
+      try {
+        task.metrics.shuffleWriteMetrics.bytesWritten
+      } catch {
+        case t: Exception => return 0
+      }
+    }
+    
+    def getGcTime(): Long = {
+      try {
+        task.metrics.jvmGCTime
+      } catch {
+        case t: Exception => return 0
+      }
+    }
+
+    //    def getBytesReadAndWritten(): Long = {
+    //      try {
+    //        task.metrics.inputMetrics.bytesRead + task.metrics.outputMetrics.bytesWritten
+    //      } catch {
+    //        case t: Exception => return 0
+    //      }
+    //    }
+
+    def shouldOptimise: Boolean = taskDescription.shouldOptimise
+
     /**
      * Set the finished flag to true and clear the current thread's interrupt status
      */
@@ -299,7 +969,7 @@ private[spark] class Executor(
       val ser = env.closureSerializer.newInstance()
       logInfo(s"Running $taskName (TID $taskId)")
       execBackend.statusUpdate(taskId, TaskState.RUNNING, EMPTY_BYTE_BUFFER)
-      var taskStart: Long = 0
+
       var taskStartCpu: Long = 0
       startGCTime = computeTotalGcTime()
 
@@ -443,8 +1113,7 @@ private[spark] class Executor(
           setTaskFinishedAndClearInterruptStatus()
           execBackend.statusUpdate(taskId, TaskState.KILLED, ser.serialize(TaskKilled(t.reason)))
 
-        case _: InterruptedException | NonFatal(_) if
-            task != null && task.reasonIfKilled.isDefined =>
+        case _: InterruptedException | NonFatal(_) if task != null && task.reasonIfKilled.isDefined =>
           val killReason = task.reasonIfKilled.getOrElse("unknown reason")
           logInfo(s"Executor interrupted and killed $taskName (TID $taskId), reason: $killReason")
           setTaskFinishedAndClearInterruptStatus()
@@ -549,9 +1218,9 @@ private[spark] class Executor(
    * if the supervised task never exits.
    */
   private class TaskReaper(
-      taskRunner: TaskRunner,
-      val interruptThread: Boolean,
-      val reason: String)
+    taskRunner:          TaskRunner,
+    val interruptThread: Boolean,
+    val reason:          String)
     extends Runnable {
 
     private[this] val taskId: Long = taskRunner.taskId
@@ -742,7 +1411,7 @@ private[spark] class Executor(
     val message = Heartbeat(executorId, accumUpdates.toArray, env.blockManager.blockManagerId)
     try {
       val response = heartbeatReceiverRef.askSync[HeartbeatResponse](
-          message, RpcTimeout(conf, "spark.executor.heartbeatInterval", "10s"))
+        message, RpcTimeout(conf, "spark.executor.heartbeatInterval", "10s"))
       if (response.reregisterBlockManager) {
         logInfo("Told to re-register on heartbeat")
         env.blockManager.reregister()

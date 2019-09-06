@@ -24,7 +24,6 @@ package org.apache.spark.scheduler
  */
 private[spark] trait SchedulerBackend {
   private val appId = "spark-application-" + System.currentTimeMillis
-
   def start(): Unit
   def stop(): Unit
   def reviveOffers(): Unit

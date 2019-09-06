@@ -34,6 +34,8 @@ private case class ReviveOffers()
 
 private case class StatusUpdate(taskId: Long, state: TaskState, serializedData: ByteBuffer)
 
+private case class ThreadpoolUpdate(newCoreNum: Int)
+
 private case class KillTask(taskId: Long, interruptThread: Boolean, reason: String)
 
 private case class StopExecutor()
@@ -57,7 +59,7 @@ private[spark] class LocalEndpoint(
   val localExecutorHostname = "localhost"
 
   private val executor = new Executor(
-    localExecutorId, localExecutorHostname, SparkEnv.get, userClassPath, isLocal = true)
+    localExecutorId, localExecutorHostname, SparkEnv.get, userClassPath, isLocal = true, totalCores, totalCores, scheduler.sc.applicationId, null)
 
   override def receive: PartialFunction[Any, Unit] = {
     case ReviveOffers =>
@@ -81,7 +83,7 @@ private[spark] class LocalEndpoint(
   }
 
   def reviveOffers() {
-    val offers = IndexedSeq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores))
+    val offers = IndexedSeq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores, totalCores))
     for (task <- scheduler.resourceOffers(offers).flatten) {
       freeCores -= scheduler.CPUS_PER_TASK
       executor.launchTask(executorBackend, task)
@@ -150,6 +152,10 @@ private[spark] class LocalSchedulerBackend(
 
   override def statusUpdate(taskId: Long, state: TaskState, serializedData: ByteBuffer) {
     localEndpoint.send(StatusUpdate(taskId, state, serializedData))
+  }
+  
+  override def threadpoolUpdate(newCoreNum: Int) {
+    localEndpoint.send(ThreadpoolUpdate(newCoreNum))
   }
 
   override def applicationId(): String = appId

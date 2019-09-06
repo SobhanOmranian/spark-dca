@@ -75,8 +75,11 @@ import org.apache.spark.util.random.{BernoulliCellSampler, BernoulliSampler, Poi
  */
 abstract class RDD[T: ClassTag](
     @transient private var _sc: SparkContext,
-    @transient private var deps: Seq[Dependency[_]]
+    @transient private var deps: Seq[Dependency[_]],
+    isIO: Boolean = false
   ) extends Serializable with Logging {
+  
+   var isThisIo = isIO
 
   if (classOf[RDD[_]].isAssignableFrom(elementClassTag.runtimeClass)) {
     // This is a warning instead of an exception in order to avoid breaking user programs that
@@ -1493,6 +1496,7 @@ abstract class RDD[T: ClassTag](
         (NullWritable.get(), text)
       }
     }
+    this.isThisIo = true;
     RDD.rddToPairRDDFunctions(r)(nullWritableClassTag, textClassTag, null)
       .saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](path)
   }
@@ -1511,6 +1515,7 @@ abstract class RDD[T: ClassTag](
         (NullWritable.get(), text)
       }
     }
+    this.isThisIo = true;
     RDD.rddToPairRDDFunctions(r)(nullWritableClassTag, textClassTag, null)
       .saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](path, codec)
   }

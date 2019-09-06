@@ -25,7 +25,7 @@ import org.apache.spark.annotation.DeveloperApi
 @DeveloperApi
 class ExecutorInfo(
    val executorHost: String,
-   val totalCores: Int,
+   var totalCores: Int,
    val logUrlMap: Map[String, String]) {
 
   def canEqual(other: Any): Boolean = other.isInstanceOf[ExecutorInfo]

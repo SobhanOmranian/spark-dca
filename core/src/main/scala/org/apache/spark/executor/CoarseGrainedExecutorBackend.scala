@@ -23,7 +23,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.collection.mutable
-import scala.util.{Failure, Success}
+import scala.util.{ Failure, Success }
 import scala.util.control.NonFatal
 
 import org.apache.spark._
@@ -32,19 +32,19 @@ import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.deploy.worker.WorkerWatcher
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc._
-import org.apache.spark.scheduler.{ExecutorLossReason, TaskDescription}
+import org.apache.spark.scheduler.{ ExecutorLossReason, TaskDescription }
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
 import org.apache.spark.serializer.SerializerInstance
-import org.apache.spark.util.{ThreadUtils, Utils}
+import org.apache.spark.util.{ ThreadUtils, Utils }
 
 private[spark] class CoarseGrainedExecutorBackend(
-    override val rpcEnv: RpcEnv,
-    driverUrl: String,
-    executorId: String,
-    hostname: String,
-    cores: Int,
-    userClassPath: Seq[URL],
-    env: SparkEnv)
+  override val rpcEnv: RpcEnv,
+  driverUrl:           String,
+  executorId:          String,
+  hostname:            String,
+  var cores:           Int,
+  userClassPath:       Seq[URL],
+  env:                 SparkEnv)
   extends ThreadSafeRpcEndpoint with ExecutorBackend with Logging {
 
   private[this] val stopping = new AtomicBoolean(false)
@@ -55,16 +55,39 @@ private[spark] class CoarseGrainedExecutorBackend(
   // to be changed so that we don't share the serializer instance across threads
   private[this] val ser: SerializerInstance = env.closureSerializer.newInstance()
 
+  val originalCores = cores;
+
   override def onStart() {
     logInfo("Connecting to driver: " + driverUrl)
     rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
       // This is a very fast action so we can use "ThreadUtils.sameThread"
       driver = Some(ref)
+
+      val isUpdateSchedulerEnabled = Option(System.getenv("SPARK_DCA_UPDATE_SCHEDULER")).getOrElse("0").toInt
+      val staticDca = Option(System.getenv("SPARK_DCA_STATIC")).getOrElse("0").toInt
+
+      if (isUpdateSchedulerEnabled == 1) {
+        logInfo(s"[DCA-CONFIG] [UPDATE-SCHEDULER]: Enabled!")
+
+        if (staticDca == 1) {
+
+        } else {
+          val adaptiveThreadPool = Option(System.getenv("SPARK_ADAPTIVE_THREADPOOL")).getOrElse("0").toInt
+          if (adaptiveThreadPool >= 11 && adaptiveThreadPool <= 19) {
+            logInfo(s"Ascending Adaptive Tuner, so I will register the executor with 2 number of cores.")
+            cores = 2;
+          } else if (adaptiveThreadPool == 99) {
+            logInfo(s"No Adaptive Tuner, so I will register the executor with 8 number of cores.")
+            cores = 32;
+          }
+        }
+      }
+
       ref.ask[Boolean](RegisterExecutor(executorId, self, hostname, cores, extractLogUrls))
     }(ThreadUtils.sameThread).onComplete {
       // This is a very fast action so we can use "ThreadUtils.sameThread"
       case Success(msg) =>
-        // Always receive `true`. Just ignore it
+      // Always receive `true`. Just ignore it
       case Failure(e) =>
         exitExecutor(1, s"Cannot register with driver: $driverUrl", e, notifyDriver = false)
     }(ThreadUtils.sameThread)
@@ -77,10 +100,11 @@ private[spark] class CoarseGrainedExecutorBackend(
   }
 
   override def receive: PartialFunction[Any, Unit] = {
-    case RegisteredExecutor =>
+    case RegisteredExecutor(appId) =>
       logInfo("Successfully registered with driver")
       try {
-        executor = new Executor(executorId, hostname, env, userClassPath, isLocal = false)
+
+        executor = new Executor(executorId, hostname, env, userClassPath, isLocal = false, originalCores, cores, appId, this)
       } catch {
         case NonFatal(e) =>
           exitExecutor(1, "Unable to create executor due to " + e.getMessage, e)
@@ -94,6 +118,7 @@ private[spark] class CoarseGrainedExecutorBackend(
         exitExecutor(1, "Received LaunchTask command but executor was null")
       } else {
         val taskDesc = TaskDescription.decode(data.value)
+
         logInfo("Got assigned task " + taskDesc.taskId)
         executor.launchTask(this, taskDesc)
       }
@@ -140,7 +165,16 @@ private[spark] class CoarseGrainedExecutorBackend(
     val msg = StatusUpdate(executorId, taskId, state, data)
     driver match {
       case Some(driverRef) => driverRef.send(msg)
-      case None => logWarning(s"Drop $msg because has not yet connected to driver")
+      case None            => logWarning(s"Drop $msg because has not yet connected to driver")
+    }
+  }
+
+  override def threadpoolUpdate(newCoreNum: Int) {
+    val msg = ThreadpoolUpdate(executorId, newCoreNum)
+    logInfo(s"[MSG]: sending new threadpool core [$newCoreNum] from ExecutorBackEnd[$executorId] to scheduler...")
+    driver match {
+      case Some(driverRef) => driverRef.send(msg)
+      case None            => logWarning(s"Drop $msg because has not yet connected to driver")
     }
   }
 
@@ -149,10 +183,11 @@ private[spark] class CoarseGrainedExecutorBackend(
    * executor exits differently. For e.g. when an executor goes down,
    * back-end may not want to take the parent process down.
    */
-  protected def exitExecutor(code: Int,
-                             reason: String,
-                             throwable: Throwable = null,
-                             notifyDriver: Boolean = true) = {
+  protected def exitExecutor(
+    code:         Int,
+    reason:       String,
+    throwable:    Throwable = null,
+    notifyDriver: Boolean   = true) = {
     val message = "Executor self-exiting due to : " + reason
     if (throwable != null) {
       logError(message, throwable)
@@ -162,10 +197,10 @@ private[spark] class CoarseGrainedExecutorBackend(
 
     if (notifyDriver && driver.nonEmpty) {
       driver.get.ask[Boolean](
-        RemoveExecutor(executorId, new ExecutorLossReason(reason))
-      ).onFailure { case e =>
-        logWarning(s"Unable to notify the driver due to " + e.getMessage, e)
-      }(ThreadUtils.sameThread)
+        RemoveExecutor(executorId, new ExecutorLossReason(reason))).onFailure {
+          case e =>
+            logWarning(s"Unable to notify the driver due to " + e.getMessage, e)
+        }(ThreadUtils.sameThread)
     }
 
     System.exit(code)
@@ -175,13 +210,13 @@ private[spark] class CoarseGrainedExecutorBackend(
 private[spark] object CoarseGrainedExecutorBackend extends Logging {
 
   private def run(
-      driverUrl: String,
-      executorId: String,
-      hostname: String,
-      cores: Int,
-      appId: String,
-      workerUrl: Option[String],
-      userClassPath: Seq[URL]) {
+    driverUrl:     String,
+    executorId:    String,
+    hostname:      String,
+    cores:         Int,
+    appId:         String,
+    workerUrl:     Option[String],
+    userClassPath: Seq[URL]) {
 
     Utils.initDaemon(log)
 

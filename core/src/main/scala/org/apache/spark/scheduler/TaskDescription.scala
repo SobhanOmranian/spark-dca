@@ -53,10 +53,16 @@ private[spark] class TaskDescription(
     val addedFiles: Map[String, Long],
     val addedJars: Map[String, Long],
     val properties: Properties,
-    val serializedTask: ByteBuffer) {
-
+    val serializedTask: ByteBuffer,
+    val stageId: Int = -1,
+    val applicationId: String,
+    var isIo: Boolean = false) {
+  
+  var shouldOptimise: Boolean = false
   override def toString: String = "TaskDescription(TID=%d, index=%d)".format(taskId, index)
 }
+
+
 
 private[spark] object TaskDescription {
   private def serializeStringLongMap(map: Map[String, Long], dataOut: DataOutputStream): Unit = {
@@ -73,6 +79,10 @@ private[spark] object TaskDescription {
 
     dataOut.writeLong(taskDescription.taskId)
     dataOut.writeInt(taskDescription.attemptNumber)
+    // CUSTOM CODE
+    dataOut.writeInt(taskDescription.stageId)
+    dataOut.writeUTF(taskDescription.applicationId)
+    dataOut.writeBoolean(taskDescription.isIo)
     dataOut.writeUTF(taskDescription.executorId)
     dataOut.writeUTF(taskDescription.name)
     dataOut.writeInt(taskDescription.index)
@@ -114,6 +124,9 @@ private[spark] object TaskDescription {
     val dataIn = new DataInputStream(new ByteBufferInputStream(byteBuffer))
     val taskId = dataIn.readLong()
     val attemptNumber = dataIn.readInt()
+    val stageId = dataIn.readInt()
+    val applicationId = dataIn.readUTF()
+    val isIo = dataIn.readBoolean()
     val executorId = dataIn.readUTF()
     val name = dataIn.readUTF()
     val index = dataIn.readInt()
@@ -139,6 +152,6 @@ private[spark] object TaskDescription {
     val serializedTask = byteBuffer.slice()
 
     new TaskDescription(taskId, attemptNumber, executorId, name, index, taskFiles, taskJars,
-      properties, serializedTask)
+      properties, serializedTask, stageId, applicationId, isIo)
   }
 }

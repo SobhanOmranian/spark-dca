@@ -39,7 +39,8 @@ object DataReadMethod extends Enumeration with Serializable {
  * A collection of accumulators that represents metrics about reading data from external systems.
  */
 @DeveloperApi
-class InputMetrics private[spark] () extends Serializable {
+//private[spark]
+class InputMetrics  () extends Serializable {
   private[executor] val _bytesRead = new LongAccumulator
   private[executor] val _recordsRead = new LongAccumulator
 

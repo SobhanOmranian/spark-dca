@@ -21,7 +21,7 @@ import java.lang.management.ManagementFactory
 
 import scala.annotation.tailrec
 
-import org.apache.spark.util.{IntParam, MemoryParam, Utils}
+import org.apache.spark.util.{ IntParam, MemoryParam, Utils }
 import org.apache.spark.SparkConf
 
 /**
@@ -36,6 +36,10 @@ private[worker] class WorkerArguments(args: Array[String], conf: SparkConf) {
   var masters: Array[String] = null
   var workDir: String = null
   var propertiesFile: String = null
+  // [CUSTOM CODE]
+  var perf: String = null
+  var strace: String = null
+  // [CUSTOM CODE END]
 
   // Check for settings in environment variables
   if (System.getenv("SPARK_WORKER_PORT") != null) {
@@ -101,18 +105,30 @@ private[worker] class WorkerArguments(args: Array[String], conf: SparkConf) {
       propertiesFile = value
       parse(tail)
 
+    // [CUSTOM CODE]
+    case ("--perf") :: value :: tail =>
+      perf = value
+      parse(tail)
+    // [CUSTOM CODE END]
+
+    // [CUSTOM CODE]
+    case ("--strace") :: value :: tail =>
+      strace = value
+      parse(tail)
+    // [CUSTOM CODE END]
+
     case ("--help") :: tail =>
       printUsageAndExit(0)
 
     case value :: tail =>
-      if (masters != null) {  // Two positional arguments were given
+      if (masters != null) { // Two positional arguments were given
         printUsageAndExit(1)
       }
       masters = Utils.parseStandaloneMasterUrls(value)
       parse(tail)
 
     case Nil =>
-      if (masters == null) {  // No positional argument was given
+      if (masters == null) { // No positional argument was given
         printUsageAndExit(1)
       }
 
@@ -127,19 +143,19 @@ private[worker] class WorkerArguments(args: Array[String], conf: SparkConf) {
     // scalastyle:off println
     System.err.println(
       "Usage: Worker [options] <master>\n" +
-      "\n" +
-      "Master must be a URL of the form spark://hostname:port\n" +
-      "\n" +
-      "Options:\n" +
-      "  -c CORES, --cores CORES  Number of cores to use\n" +
-      "  -m MEM, --memory MEM     Amount of memory to use (e.g. 1000M, 2G)\n" +
-      "  -d DIR, --work-dir DIR   Directory to run apps in (default: SPARK_HOME/work)\n" +
-      "  -i HOST, --ip IP         Hostname to listen on (deprecated, please use --host or -h)\n" +
-      "  -h HOST, --host HOST     Hostname to listen on\n" +
-      "  -p PORT, --port PORT     Port to listen on (default: random)\n" +
-      "  --webui-port PORT        Port for web UI (default: 8081)\n" +
-      "  --properties-file FILE   Path to a custom Spark properties file.\n" +
-      "                           Default is conf/spark-defaults.conf.")
+        "\n" +
+        "Master must be a URL of the form spark://hostname:port\n" +
+        "\n" +
+        "Options:\n" +
+        "  -c CORES, --cores CORES  Number of cores to use\n" +
+        "  -m MEM, --memory MEM     Amount of memory to use (e.g. 1000M, 2G)\n" +
+        "  -d DIR, --work-dir DIR   Directory to run apps in (default: SPARK_HOME/work)\n" +
+        "  -i HOST, --ip IP         Hostname to listen on (deprecated, please use --host or -h)\n" +
+        "  -h HOST, --host HOST     Hostname to listen on\n" +
+        "  -p PORT, --port PORT     Port to listen on (default: random)\n" +
+        "  --webui-port PORT        Port for web UI (default: 8081)\n" +
+        "  --properties-file FILE   Path to a custom Spark properties file.\n" +
+        "                           Default is conf/spark-defaults.conf.")
     // scalastyle:on println
     System.exit(exitCode)
   }
@@ -166,10 +182,10 @@ private[worker] class WorkerArguments(args: Array[String], conf: SparkConf) {
       // scalastyle:on classforname
     } catch {
       case e: Exception =>
-        totalMb = 2*1024
+        totalMb = 2 * 1024
         // scalastyle:off println
         System.out.println("Failed to get total physical memory. Using " + totalMb + " MB")
-        // scalastyle:on println
+      // scalastyle:on println
     }
     // Leave out 1 GB for the operating system, but don't return a negative memory size
     math.max(totalMb - 1024, Utils.DEFAULT_DRIVER_MEM_MB)

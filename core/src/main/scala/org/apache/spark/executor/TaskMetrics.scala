@@ -42,7 +42,8 @@ import org.apache.spark.util._
  * be sent to the driver.
  */
 @DeveloperApi
-class TaskMetrics private[spark] () extends Serializable {
+//private[spark] ()
+class TaskMetrics extends Serializable {
   // Each metric is internally represented as an accumulator
   private val _executorDeserializeTime = new LongAccumulator
   private val _executorDeserializeCpuTime = new LongAccumulator
