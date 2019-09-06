@@ -18,7 +18,7 @@
 package org.apache.spark.scheduler
 
 import org.apache.hadoop.mapred.{FileOutputCommitter, TaskAttemptContext}
-import org.scalatest.concurrent.{Signaler, ThreadSignaler, TimeLimits}
+import org.scalatest.concurrent.Timeouts
 import org.scalatest.time.{Seconds, Span}
 
 import org.apache.spark.{LocalSparkContext, SparkConf, SparkContext, SparkFunSuite, TaskContext}
@@ -32,10 +32,7 @@ import org.apache.spark.util.Utils
 class OutputCommitCoordinatorIntegrationSuite
   extends SparkFunSuite
   with LocalSparkContext
-  with TimeLimits {
-
-  // Necessary to make ScalaTest 3.x interrupt a thread on the JVM like ScalaTest 2.2.x
-  implicit val defaultSignaler: Signaler = ThreadSignaler
+  with Timeouts {
 
   override def beforeAll(): Unit = {
     super.beforeAll()
@@ -49,8 +46,11 @@ class OutputCommitCoordinatorIntegrationSuite
   test("exception thrown in OutputCommitter.commitTask()") {
     // Regression test for SPARK-10381
     failAfter(Span(60, Seconds)) {
-      withTempDir { tempDir =>
+      val tempDir = Utils.createTempDir()
+      try {
         sc.parallelize(1 to 4, 2).map(_.toString).saveAsTextFile(tempDir.getAbsolutePath + "/out")
+      } finally {
+        Utils.deleteRecursively(tempDir)
       }
     }
   }

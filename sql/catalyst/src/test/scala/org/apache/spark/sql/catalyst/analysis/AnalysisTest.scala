@@ -21,9 +21,7 @@ import java.net.URI
 import java.util.Locale
 
 import org.apache.spark.sql.AnalysisException
-import org.apache.spark.sql.catalyst.QueryPlanningTracker
 import org.apache.spark.sql.catalyst.catalog.{CatalogDatabase, InMemoryCatalog, SessionCatalog}
-import org.apache.spark.sql.catalyst.parser.ParseException
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.internal.SQLConf
@@ -41,7 +39,6 @@ trait AnalysisTest extends PlanTest {
       ignoreIfExists = false)
     catalog.createTempView("TaBlE", TestRelations.testRelation, overrideIfExists = true)
     catalog.createTempView("TaBlE2", TestRelations.testRelation2, overrideIfExists = true)
-    catalog.createTempView("TaBlE3", TestRelations.testRelation3, overrideIfExists = true)
     new Analyzer(catalog, conf) {
       override val extendedResolutionRules = EliminateSubqueryAliases :: Nil
     }
@@ -56,16 +53,9 @@ trait AnalysisTest extends PlanTest {
       expectedPlan: LogicalPlan,
       caseSensitive: Boolean = true): Unit = {
     val analyzer = getAnalyzer(caseSensitive)
-    val actualPlan = analyzer.executeAndCheck(inputPlan, new QueryPlanningTracker)
+    val actualPlan = analyzer.execute(inputPlan)
+    analyzer.checkAnalysis(actualPlan)
     comparePlans(actualPlan, expectedPlan)
-  }
-
-  protected override def comparePlans(
-      plan1: LogicalPlan,
-      plan2: LogicalPlan,
-      checkAnalysis: Boolean = false): Unit = {
-    // Analysis tests may have not been fully resolved, so skip checkAnalysis.
-    super.comparePlans(plan1, plan2, checkAnalysis)
   }
 
   protected def assertAnalysisSuccess(
@@ -106,14 +96,6 @@ trait AnalysisTest extends PlanTest {
            |
            |  ${e.getMessage}
          """.stripMargin)
-    }
-  }
-
-  protected def interceptParseException(
-      parser: String => Any)(sqlCommand: String, messages: String*): Unit = {
-    val e = intercept[ParseException](parser(sqlCommand))
-    messages.foreach { message =>
-      assert(e.message.contains(message))
     }
   }
 }

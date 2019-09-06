@@ -21,7 +21,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 
 import org.apache.spark.annotation.Private;
-import org.apache.spark.shuffle.ShuffleWriteMetricsReporter;
+import org.apache.spark.executor.ShuffleWriteMetrics;
 
 /**
  * Intercepts write calls and tracks total time spent writing in order to update shuffle write
@@ -30,11 +30,10 @@ import org.apache.spark.shuffle.ShuffleWriteMetricsReporter;
 @Private
 public final class TimeTrackingOutputStream extends OutputStream {
 
-  private final ShuffleWriteMetricsReporter writeMetrics;
+  private final ShuffleWriteMetrics writeMetrics;
   private final OutputStream outputStream;
 
-  public TimeTrackingOutputStream(
-      ShuffleWriteMetricsReporter writeMetrics, OutputStream outputStream) {
+  public TimeTrackingOutputStream(ShuffleWriteMetrics writeMetrics, OutputStream outputStream) {
     this.writeMetrics = writeMetrics;
     this.outputStream = outputStream;
   }

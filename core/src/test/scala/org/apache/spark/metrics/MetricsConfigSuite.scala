@@ -21,7 +21,6 @@ import org.scalatest.BeforeAndAfter
 
 import org.apache.spark.SparkConf
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.internal.config.METRICS_CONF
 
 class MetricsConfigSuite extends SparkFunSuite with BeforeAndAfter {
   var filePath: String = _
@@ -32,7 +31,7 @@ class MetricsConfigSuite extends SparkFunSuite with BeforeAndAfter {
 
   test("MetricsConfig with default properties") {
     val sparkConf = new SparkConf(loadDefaults = false)
-    sparkConf.set(METRICS_CONF, "dummy-file")
+    sparkConf.set("spark.metrics.conf", "dummy-file")
     val conf = new MetricsConfig(sparkConf)
     conf.initialize()
 
@@ -48,7 +47,7 @@ class MetricsConfigSuite extends SparkFunSuite with BeforeAndAfter {
 
   test("MetricsConfig with properties set from a file") {
     val sparkConf = new SparkConf(loadDefaults = false)
-    sparkConf.set(METRICS_CONF, filePath)
+    sparkConf.set("spark.metrics.conf", filePath)
     val conf = new MetricsConfig(sparkConf)
     conf.initialize()
 
@@ -111,7 +110,7 @@ class MetricsConfigSuite extends SparkFunSuite with BeforeAndAfter {
     setMetricsProperty(sparkConf, "*.source.jvm.class", "org.apache.spark.SomeOtherSource")
     setMetricsProperty(sparkConf, "master.sink.console.period", "50")
     setMetricsProperty(sparkConf, "master.sink.console.unit", "seconds")
-    sparkConf.set(METRICS_CONF, filePath)
+    sparkConf.set("spark.metrics.conf", filePath)
     val conf = new MetricsConfig(sparkConf)
     conf.initialize()
 
@@ -136,7 +135,7 @@ class MetricsConfigSuite extends SparkFunSuite with BeforeAndAfter {
 
   test("MetricsConfig with subProperties") {
     val sparkConf = new SparkConf(loadDefaults = false)
-    sparkConf.set(METRICS_CONF, filePath)
+    sparkConf.set("spark.metrics.conf", filePath)
     val conf = new MetricsConfig(sparkConf)
     conf.initialize()
 

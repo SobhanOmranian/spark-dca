@@ -22,19 +22,18 @@ import org.apache.hadoop.fs.{FileStatus, Path}
 import org.apache.hadoop.mapreduce.{Job, TaskAttemptContext}
 
 import org.apache.spark.TaskContext
-import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.sql.{AnalysisException, SparkSession}
+import org.apache.spark.sql.{AnalysisException, Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
-import org.apache.spark.sql.catalyst.expressions.codegen.UnsafeRowWriter
+import org.apache.spark.sql.catalyst.expressions.codegen.{BufferHolder, UnsafeRowWriter}
 import org.apache.spark.sql.catalyst.util.CompressionCodecs
 import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.sources._
-import org.apache.spark.sql.types.{DataType, StringType, StructType}
+import org.apache.spark.sql.types.{StringType, StructType}
 import org.apache.spark.util.SerializableConfiguration
 
 /**
- * A data source for reading text files. The text files must be encoded as UTF-8.
+ * A data source for reading text files.
  */
 class TextFileFormat extends TextBasedFileFormat with DataSourceRegister {
 
@@ -47,14 +46,11 @@ class TextFileFormat extends TextBasedFileFormat with DataSourceRegister {
       throw new AnalysisException(
         s"Text data source supports only a single column, and you have ${schema.size} columns.")
     }
-  }
-
-  override def isSplitable(
-      sparkSession: SparkSession,
-      options: Map[String, String],
-      path: Path): Boolean = {
-    val textOptions = new TextOptions(options)
-    super.isSplitable(sparkSession, options, path) && !textOptions.wholeText
+    val tpe = schema(0).dataType
+    if (tpe != StringType) {
+      throw new AnalysisException(
+        s"Text data source supports only a string column, but you have ${tpe.simpleString}.")
+    }
   }
 
   override def inferSchema(
@@ -81,7 +77,7 @@ class TextFileFormat extends TextBasedFileFormat with DataSourceRegister {
           path: String,
           dataSchema: StructType,
           context: TaskAttemptContext): OutputWriter = {
-        new TextOutputWriter(path, dataSchema, textOptions.lineSeparatorInWrite, context)
+        new TextOutputWriter(path, dataSchema, context)
       }
 
       override def getFileExtension(context: TaskAttemptContext): String = {
@@ -101,43 +97,51 @@ class TextFileFormat extends TextBasedFileFormat with DataSourceRegister {
     assert(
       requiredSchema.length <= 1,
       "Text data source only produces a single data column named \"value\".")
-    val textOptions = new TextOptions(options)
+
     val broadcastedHadoopConf =
       sparkSession.sparkContext.broadcast(new SerializableConfiguration(hadoopConf))
 
-    readToUnsafeMem(broadcastedHadoopConf, requiredSchema, textOptions)
-  }
-
-  private def readToUnsafeMem(
-      conf: Broadcast[SerializableConfiguration],
-      requiredSchema: StructType,
-      textOptions: TextOptions): (PartitionedFile) => Iterator[UnsafeRow] = {
-
     (file: PartitionedFile) => {
-      val confValue = conf.value.value
-      val reader = if (!textOptions.wholeText) {
-        new HadoopFileLinesReader(file, textOptions.lineSeparatorInRead, confValue)
-      } else {
-        new HadoopFileWholeTextReader(file, confValue)
-      }
-      Option(TaskContext.get()).foreach(_.addTaskCompletionListener[Unit](_ => reader.close()))
+      val reader = new HadoopFileLinesReader(file, broadcastedHadoopConf.value.value)
+      Option(TaskContext.get()).foreach(_.addTaskCompletionListener(_ => reader.close()))
+
       if (requiredSchema.isEmpty) {
         val emptyUnsafeRow = new UnsafeRow(0)
         reader.map(_ => emptyUnsafeRow)
       } else {
-        val unsafeRowWriter = new UnsafeRowWriter(1)
+        val unsafeRow = new UnsafeRow(1)
+        val bufferHolder = new BufferHolder(unsafeRow)
+        val unsafeRowWriter = new UnsafeRowWriter(bufferHolder, 1)
 
         reader.map { line =>
           // Writes to an UnsafeRow directly
-          unsafeRowWriter.reset()
+          bufferHolder.reset()
           unsafeRowWriter.write(0, line.getBytes, 0, line.getLength)
-          unsafeRowWriter.getRow()
+          unsafeRow.setTotalSize(bufferHolder.totalSize())
+          unsafeRow
         }
       }
     }
   }
-
-  override def supportDataType(dataType: DataType): Boolean =
-    dataType == StringType
 }
 
+class TextOutputWriter(
+    path: String,
+    dataSchema: StructType,
+    context: TaskAttemptContext)
+  extends OutputWriter {
+
+  private val writer = CodecStreams.createOutputStream(context, new Path(path))
+
+  override def write(row: InternalRow): Unit = {
+    if (!row.isNullAt(0)) {
+      val utf8string = row.getUTF8String(0)
+      utf8string.writeTo(writer)
+    }
+    writer.write('\n')
+  }
+
+  override def close(): Unit = {
+    writer.close()
+  }
+}

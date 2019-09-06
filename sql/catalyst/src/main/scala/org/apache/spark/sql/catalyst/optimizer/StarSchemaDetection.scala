@@ -28,9 +28,7 @@ import org.apache.spark.sql.internal.SQLConf
 /**
  * Encapsulates star-schema detection logic.
  */
-object StarSchemaDetection extends PredicateHelper {
-
-  private def conf = SQLConf.get
+case class StarSchemaDetection(conf: SQLConf) extends PredicateHelper {
 
   /**
    * Star schema consists of one or more fact tables referencing a number of dimension
@@ -84,7 +82,7 @@ object StarSchemaDetection extends PredicateHelper {
       // Find if the input plans are eligible for star join detection.
       // An eligible plan is a base table access with valid statistics.
       val foundEligibleJoin = input.forall {
-        case PhysicalOperation(_, _, t: LeafNode) if t.stats.rowCount.isDefined => true
+        case PhysicalOperation(_, _, t: LeafNode) if t.stats(conf).rowCount.isDefined => true
         case _ => false
       }
 
@@ -183,15 +181,15 @@ object StarSchemaDetection extends PredicateHelper {
       val leafCol = findLeafNodeCol(column, plan)
       leafCol match {
         case Some(col) if t.outputSet.contains(col) =>
-          val stats = t.stats
+          val stats = t.stats(conf)
           stats.rowCount match {
             case Some(rowCount) if rowCount >= 0 =>
               if (stats.attributeStats.nonEmpty && stats.attributeStats.contains(col)) {
-                val colStats = stats.attributeStats.get(col).get
-                if (!colStats.hasCountStats || colStats.nullCount.get > 0) {
+                val colStats = stats.attributeStats.get(col)
+                if (colStats.get.nullCount > 0) {
                   false
                 } else {
-                  val distinctCount = colStats.distinctCount.get
+                  val distinctCount = colStats.get.distinctCount
                   val relDiff = math.abs((distinctCount.toDouble / rowCount.toDouble) - 1.0d)
                   // ndvMaxErr adjusted based on TPCDS 1TB data results
                   relDiff <= conf.ndvMaxError * 2
@@ -239,7 +237,7 @@ object StarSchemaDetection extends PredicateHelper {
       val leafCol = findLeafNodeCol(column, plan)
       leafCol match {
         case Some(col) if t.outputSet.contains(col) =>
-          val stats = t.stats
+          val stats = t.stats(conf)
           stats.attributeStats.nonEmpty && stats.attributeStats.contains(col)
         case None => false
       }
@@ -298,11 +296,11 @@ object StarSchemaDetection extends PredicateHelper {
    */
   private def getTableAccessCardinality(
       input: LogicalPlan): Option[BigInt] = input match {
-    case PhysicalOperation(_, cond, t: LeafNode) if t.stats.rowCount.isDefined =>
-      if (conf.cboEnabled && input.stats.rowCount.isDefined) {
-        Option(input.stats.rowCount.get)
+    case PhysicalOperation(_, cond, t: LeafNode) if t.stats(conf).rowCount.isDefined =>
+      if (conf.cboEnabled && input.stats(conf).rowCount.isDefined) {
+        Option(input.stats(conf).rowCount.get)
       } else {
-        Option(t.stats.rowCount.get)
+        Option(t.stats(conf).rowCount.get)
       }
     case _ => None
   }

@@ -69,8 +69,8 @@ public final class JavaStructuredSessionization {
     FlatMapFunction<LineWithTimestamp, Event> linesToEvents =
       new FlatMapFunction<LineWithTimestamp, Event>() {
         @Override
-        public Iterator<Event> call(LineWithTimestamp lineWithTimestamp) {
-          ArrayList<Event> eventList = new ArrayList<>();
+        public Iterator<Event> call(LineWithTimestamp lineWithTimestamp) throws Exception {
+          ArrayList<Event> eventList = new ArrayList<Event>();
           for (String word : lineWithTimestamp.getLine().split(" ")) {
             eventList.add(new Event(word, lineWithTimestamp.getTimestamp()));
           }
@@ -91,7 +91,8 @@ public final class JavaStructuredSessionization {
     MapGroupsWithStateFunction<String, Event, SessionInfo, SessionUpdate> stateUpdateFunc =
       new MapGroupsWithStateFunction<String, Event, SessionInfo, SessionUpdate>() {
         @Override public SessionUpdate call(
-            String sessionId, Iterator<Event> events, GroupState<SessionInfo> state) {
+            String sessionId, Iterator<Event> events, GroupState<SessionInfo> state)
+              throws Exception {
           // If timed out, then remove session and send final update
           if (state.hasTimedOut()) {
             SessionUpdate finalUpdate = new SessionUpdate(
@@ -137,7 +138,7 @@ public final class JavaStructuredSessionization {
     Dataset<SessionUpdate> sessionUpdates = events
         .groupByKey(
             new MapFunction<Event, String>() {
-              @Override public String call(Event event) {
+              @Override public String call(Event event) throws Exception {
                 return event.getSessionId();
               }
             }, Encoders.STRING())

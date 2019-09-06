@@ -24,30 +24,22 @@ import org.apache.spark.sql.catalyst.util.TypeUtils
 import org.apache.spark.sql.types._
 
 @ExpressionDescription(
-  usage = "_FUNC_(expr) - Returns the mean calculated from values of a group.",
-  examples = """
-    Examples:
-      > SELECT _FUNC_(col) FROM VALUES (1), (2), (3) AS tab(col);
-       2.0
-      > SELECT _FUNC_(col) FROM VALUES (1), (2), (NULL) AS tab(col);
-       1.5
-  """,
-  since = "1.0.0")
+  usage = "_FUNC_(expr) - Returns the mean calculated from values of a group.")
 case class Average(child: Expression) extends DeclarativeAggregate with ImplicitCastInputTypes {
 
   override def prettyName: String = "avg"
 
   override def children: Seq[Expression] = child :: Nil
 
-  override def inputTypes: Seq[AbstractDataType] = Seq(NumericType)
-
-  override def checkInputDataTypes(): TypeCheckResult =
-    TypeUtils.checkForNumericExpr(child.dataType, "function average")
-
   override def nullable: Boolean = true
 
   // Return data type.
   override def dataType: DataType = resultType
+
+  override def inputTypes: Seq[AbstractDataType] = Seq(NumericType)
+
+  override def checkInputDataTypes(): TypeCheckResult =
+    TypeUtils.checkForNumericExpr(child.dataType, "function average")
 
   private lazy val resultType = child.dataType match {
     case DecimalType.Fixed(p, s) =>
@@ -66,8 +58,16 @@ case class Average(child: Expression) extends DeclarativeAggregate with Implicit
   override lazy val aggBufferAttributes = sum :: count :: Nil
 
   override lazy val initialValues = Seq(
-    /* sum = */ Literal(0).cast(sumDataType),
+    /* sum = */ Cast(Literal(0), sumDataType),
     /* count = */ Literal(0L)
+  )
+
+  override lazy val updateExpressions = Seq(
+    /* sum = */
+    Add(
+      sum,
+      Coalesce(Cast(child, sumDataType) :: Cast(Literal(0), sumDataType) :: Nil)),
+    /* count = */ If(IsNull(child), count, count + 1L)
   )
 
   override lazy val mergeExpressions = Seq(
@@ -78,16 +78,10 @@ case class Average(child: Expression) extends DeclarativeAggregate with Implicit
   // If all input are nulls, count will be 0 and we will get null after the division.
   override lazy val evaluateExpression = child.dataType match {
     case _: DecimalType =>
-      DecimalPrecision.decimalAndDecimal(sum / count.cast(DecimalType.LongDecimal)).cast(resultType)
+      Cast(
+        DecimalPrecision.decimalAndDecimal(sum / Cast(count, DecimalType.LongDecimal)),
+        resultType)
     case _ =>
-      sum.cast(resultType) / count.cast(resultType)
+      Cast(sum, resultType) / Cast(count, resultType)
   }
-
-  override lazy val updateExpressions: Seq[Expression] = Seq(
-    /* sum = */
-    Add(
-      sum,
-      coalesce(child.cast(sumDataType), Literal(0).cast(sumDataType))),
-    /* count = */ If(child.isNull, count, count + 1L)
-  )
 }

@@ -104,7 +104,7 @@ object LinearRegression {
     val numTest = test.count()
     println(s"Training: $numTraining, test: $numTest.")
 
-    examples.unpersist()
+    examples.unpersist(blocking = false)
 
     val updater = params.regType match {
       case NONE => new SimpleUpdater()

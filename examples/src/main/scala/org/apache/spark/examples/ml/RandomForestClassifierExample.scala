@@ -64,7 +64,7 @@ object RandomForestClassifierExample {
     val labelConverter = new IndexToString()
       .setInputCol("prediction")
       .setOutputCol("predictedLabel")
-      .setLabels(labelIndexer.labelsArray(0))
+      .setLabels(labelIndexer.labels)
 
     // Chain indexers and forest in a Pipeline.
     val pipeline = new Pipeline()
@@ -85,10 +85,10 @@ object RandomForestClassifierExample {
       .setPredictionCol("prediction")
       .setMetricName("accuracy")
     val accuracy = evaluator.evaluate(predictions)
-    println(s"Test Error = ${(1.0 - accuracy)}")
+    println("Test Error = " + (1.0 - accuracy))
 
     val rfModel = model.stages(2).asInstanceOf[RandomForestClassificationModel]
-    println(s"Learned classification forest model:\n ${rfModel.toDebugString}")
+    println("Learned classification forest model:\n" + rfModel.toDebugString)
     // $example off$
 
     spark.stop()

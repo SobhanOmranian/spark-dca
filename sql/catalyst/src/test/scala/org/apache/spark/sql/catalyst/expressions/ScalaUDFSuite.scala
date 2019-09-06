@@ -20,17 +20,15 @@ package org.apache.spark.sql.catalyst.expressions
 import java.util.Locale
 
 import org.apache.spark.{SparkException, SparkFunSuite}
-import org.apache.spark.sql.catalyst.expressions.codegen.CodegenContext
-import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{DecimalType, IntegerType, StringType}
+import org.apache.spark.sql.types.{IntegerType, StringType}
 
 class ScalaUDFSuite extends SparkFunSuite with ExpressionEvalHelper {
 
   test("basic") {
-    val intUdf = ScalaUDF((i: Int) => i + 1, IntegerType, Literal(1) :: Nil, true :: Nil)
+    val intUdf = ScalaUDF((i: Int) => i + 1, IntegerType, Literal(1) :: Nil)
     checkEvaluation(intUdf, 2)
 
-    val stringUdf = ScalaUDF((s: String) => s + "x", StringType, Literal("a") :: Nil, false :: Nil)
+    val stringUdf = ScalaUDF((s: String) => s + "x", StringType, Literal("a") :: Nil)
     checkEvaluation(stringUdf, "ax")
   }
 
@@ -38,43 +36,15 @@ class ScalaUDFSuite extends SparkFunSuite with ExpressionEvalHelper {
     val udf = ScalaUDF(
       (s: String) => s.toLowerCase(Locale.ROOT),
       StringType,
-      Literal.create(null, StringType) :: Nil,
-      false :: Nil)
+      Literal.create(null, StringType) :: Nil)
 
     val e1 = intercept[SparkException](udf.eval())
     assert(e1.getMessage.contains("Failed to execute user defined function"))
 
     val e2 = intercept[SparkException] {
-      checkEvaluationWithUnsafeProjection(udf, null)
+      checkEvalutionWithUnsafeProjection(udf, null)
     }
     assert(e2.getMessage.contains("Failed to execute user defined function"))
   }
 
-  test("SPARK-22695: ScalaUDF should not use global variables") {
-    val ctx = new CodegenContext
-    ScalaUDF((s: String) => s + "x", StringType, Literal("a") :: Nil, false :: Nil).genCode(ctx)
-    assert(ctx.inlinedMutableStates.isEmpty)
-  }
-
-  test("SPARK-28369: honor nullOnOverflow config for ScalaUDF") {
-    withSQLConf(SQLConf.DECIMAL_OPERATIONS_NULL_ON_OVERFLOW.key -> "false") {
-      val udf = ScalaUDF(
-        (a: java.math.BigDecimal) => a.multiply(new java.math.BigDecimal(100)),
-        DecimalType.SYSTEM_DEFAULT,
-        Literal(BigDecimal("12345678901234567890.123")) :: Nil, false :: Nil)
-      val e1 = intercept[ArithmeticException](udf.eval())
-      assert(e1.getMessage.contains("cannot be represented as Decimal"))
-      val e2 = intercept[SparkException] {
-        checkEvaluationWithUnsafeProjection(udf, null)
-      }
-      assert(e2.getCause.isInstanceOf[ArithmeticException])
-    }
-    withSQLConf(SQLConf.DECIMAL_OPERATIONS_NULL_ON_OVERFLOW.key -> "true") {
-      val udf = ScalaUDF(
-        (a: java.math.BigDecimal) => a.multiply(new java.math.BigDecimal(100)),
-        DecimalType.SYSTEM_DEFAULT,
-        Literal(BigDecimal("12345678901234567890.123")) :: Nil, false :: Nil)
-      checkEvaluation(udf, null)
-    }
-  }
 }

@@ -27,12 +27,10 @@ import scala.concurrent.Promise
 import scala.concurrent.duration._
 
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars
-import org.apache.hadoop.hive.contrib.udaf.example.UDAFExampleMax
 import org.scalatest.BeforeAndAfterAll
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.hive.test.HiveTestUtils
 import org.apache.spark.sql.test.ProcessTestUtils.ProcessOutputCapturer
 import org.apache.spark.util.{ThreadUtils, Utils}
 
@@ -202,7 +200,10 @@ class CliSuite extends SparkFunSuite with BeforeAndAfterAll with Logging {
   }
 
   test("Commands using SerDe provided in --jars") {
-    val jarFile = HiveTestUtils.getHiveHcatalogCoreJar.getCanonicalPath
+    val jarFile =
+      "../hive/src/test/resources/hive-hcatalog-core-0.13.1.jar"
+        .split("/")
+        .mkString(File.separator)
 
     val dataFilePath =
       Thread.currentThread().getContextClassLoader.getResource("data/files/small_kv.txt")
@@ -280,29 +281,6 @@ class CliSuite extends SparkFunSuite with BeforeAndAfterAll with Logging {
       "SET conf2;" -> "1",
       "SET conf3=${hiveconf:conf1};" -> "conftest",
       "SET conf3;" -> "conftest"
-    )
-  }
-
-  test("SPARK-21451: spark.sql.warehouse.dir should respect options in --hiveconf") {
-    runCliWithin(1.minute)("set spark.sql.warehouse.dir;" -> warehousePath.getAbsolutePath)
-  }
-
-  test("SPARK-21451: Apply spark.hadoop.* configurations") {
-    val tmpDir = Utils.createTempDir(namePrefix = "SPARK-21451")
-    runCliWithin(
-      1.minute,
-      Seq("--conf", s"spark.hadoop.${ConfVars.METASTOREWAREHOUSE}=$tmpDir"))(
-      "set spark.sql.warehouse.dir;" -> tmpDir.getAbsolutePath)
-    tmpDir.delete()
-  }
-
-  test("Support hive.aux.jars.path") {
-    val hiveContribJar = HiveTestUtils.getHiveContribJar.getCanonicalPath
-    runCliWithin(
-      1.minute,
-      Seq("--conf", s"spark.hadoop.${ConfVars.HIVEAUXJARS}=$hiveContribJar"))(
-      s"CREATE TEMPORARY FUNCTION example_max AS '${classOf[UDAFExampleMax].getName}';" -> "",
-      "SELECT example_max(1);" -> "1"
     )
   }
 }

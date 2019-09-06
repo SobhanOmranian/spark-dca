@@ -20,8 +20,6 @@ package org.apache.spark.sql
 import org.scalatest.BeforeAndAfterEach
 
 import org.apache.spark.{SparkConf, SparkContext, SparkFunSuite}
-import org.apache.spark.internal.config.UI.UI_ENABLED
-import org.apache.spark.sql.internal.SQLConf
 
 /**
  * Test cases for the builder pattern of [[SparkSession]].
@@ -39,7 +37,7 @@ class SparkSessionBuilderSuite extends SparkFunSuite with BeforeAndAfterEach {
   test("create with config options and propagate them to SparkContext and SparkSession") {
     val session = SparkSession.builder()
       .master("local")
-      .config(UI_ENABLED.key, value = false)
+      .config("spark.ui.enabled", value = false)
       .config("some-config", "v2")
       .getOrCreate()
     assert(session.sparkContext.conf.get("some-config") == "v2")
@@ -49,24 +47,6 @@ class SparkSessionBuilderSuite extends SparkFunSuite with BeforeAndAfterEach {
   test("use global default session") {
     val session = SparkSession.builder().master("local").getOrCreate()
     assert(SparkSession.builder().getOrCreate() == session)
-  }
-
-  test("sets default and active session") {
-    assert(SparkSession.getDefaultSession == None)
-    assert(SparkSession.getActiveSession == None)
-    val session = SparkSession.builder().master("local").getOrCreate()
-    assert(SparkSession.getDefaultSession == Some(session))
-    assert(SparkSession.getActiveSession == Some(session))
-  }
-
-  test("get active or default session") {
-    val session = SparkSession.builder().master("local").getOrCreate()
-    assert(SparkSession.active == session)
-    SparkSession.clearActiveSession()
-    assert(SparkSession.active == session)
-    SparkSession.clearDefaultSession()
-    intercept[IllegalStateException](SparkSession.active)
-    session.stop()
   }
 
   test("config options are propagated to existing SparkSession") {
@@ -86,8 +66,6 @@ class SparkSessionBuilderSuite extends SparkFunSuite with BeforeAndAfterEach {
     assert(activeSession != defaultSession)
     assert(session == activeSession)
     assert(session.conf.get("spark-config2") == "a")
-    assert(session.sessionState.conf == SQLConf.get)
-    assert(SQLConf.get.getConfString("spark-config2") == "a")
     SparkSession.clearActiveSession()
 
     assert(SparkSession.builder().getOrCreate() == defaultSession)
@@ -115,23 +93,8 @@ class SparkSessionBuilderSuite extends SparkFunSuite with BeforeAndAfterEach {
     val session = SparkSession.builder().config("key2", "value2").getOrCreate()
     assert(session.conf.get("key1") == "value1")
     assert(session.conf.get("key2") == "value2")
-    assert(session.sparkContext == sparkContext2)
-    // We won't update conf for existing `SparkContext`
-    assert(!sparkContext2.conf.contains("key2"))
-    assert(sparkContext2.conf.get("key1") == "value1")
-  }
-
-  test("create SparkContext first then pass context to SparkSession") {
-    val conf = new SparkConf().setAppName("test").setMaster("local").set("key1", "value1")
-    val newSC = new SparkContext(conf)
-    val session = SparkSession.builder().sparkContext(newSC).config("key2", "value2").getOrCreate()
-    assert(session.conf.get("key1") == "value1")
-    assert(session.conf.get("key2") == "value2")
-    assert(session.sparkContext == newSC)
     assert(session.sparkContext.conf.get("key1") == "value1")
-    // If the created sparkContext is passed through the Builder's API sparkContext,
-    // the conf of this sparkContext will not contain the conf set through the API config.
-    assert(!session.sparkContext.conf.contains("key2"))
+    assert(session.sparkContext.conf.get("key2") == "value2")
     assert(session.sparkContext.conf.get("spark.app.name") == "test")
   }
 

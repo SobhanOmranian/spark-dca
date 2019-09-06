@@ -28,19 +28,17 @@ import scala.util.{Failure, Success, Try}
 
 import com.google.common.io.CharStreams
 import org.mockito.Mockito._
-import org.scalatest.Matchers
-import org.scalatest.mockito.MockitoSugar
+import org.scalatest.mock.MockitoSugar
+import org.scalatest.ShouldMatchers
 
 import org.apache.spark.{SecurityManager, SparkConf, SparkFunSuite}
-import org.apache.spark.internal.config._
-import org.apache.spark.internal.config.Network
 import org.apache.spark.network.{BlockDataManager, BlockTransferService}
 import org.apache.spark.network.buffer.{ManagedBuffer, NioManagedBuffer}
 import org.apache.spark.network.shuffle.BlockFetchingListener
 import org.apache.spark.storage.{BlockId, ShuffleBlockId}
 import org.apache.spark.util.ThreadUtils
 
-class NettyBlockTransferSecuritySuite extends SparkFunSuite with MockitoSugar with Matchers {
+class NettyBlockTransferSecuritySuite extends SparkFunSuite with MockitoSugar with ShouldMatchers {
   test("security default off") {
     val conf = new SparkConf()
       .set("spark.app.id", "app-id")
@@ -52,8 +50,8 @@ class NettyBlockTransferSecuritySuite extends SparkFunSuite with MockitoSugar wi
 
   test("security on same password") {
     val conf = new SparkConf()
-      .set(NETWORK_AUTH_ENABLED, true)
-      .set(AUTH_SECRET, "good")
+      .set("spark.authenticate", "true")
+      .set("spark.authenticate.secret", "good")
       .set("spark.app.id", "app-id")
     testConnection(conf, conf) match {
       case Success(_) => // expected
@@ -63,10 +61,10 @@ class NettyBlockTransferSecuritySuite extends SparkFunSuite with MockitoSugar wi
 
   test("security on mismatch password") {
     val conf0 = new SparkConf()
-      .set(NETWORK_AUTH_ENABLED, true)
-      .set(AUTH_SECRET, "good")
+      .set("spark.authenticate", "true")
+      .set("spark.authenticate.secret", "good")
       .set("spark.app.id", "app-id")
-    val conf1 = conf0.clone.set(AUTH_SECRET, "bad")
+    val conf1 = conf0.clone.set("spark.authenticate.secret", "bad")
     testConnection(conf0, conf1) match {
       case Success(_) => fail("Should have failed")
       case Failure(t) => t.getMessage should include ("Mismatched response")
@@ -75,10 +73,10 @@ class NettyBlockTransferSecuritySuite extends SparkFunSuite with MockitoSugar wi
 
   test("security mismatch auth off on server") {
     val conf0 = new SparkConf()
-      .set(NETWORK_AUTH_ENABLED, true)
-      .set(AUTH_SECRET, "good")
+      .set("spark.authenticate", "true")
+      .set("spark.authenticate.secret", "good")
       .set("spark.app.id", "app-id")
-    val conf1 = conf0.clone.set(NETWORK_AUTH_ENABLED, false)
+    val conf1 = conf0.clone.set("spark.authenticate", "false")
     testConnection(conf0, conf1) match {
       case Success(_) => fail("Should have failed")
       case Failure(t) => // any funny error may occur, sever will interpret SASL token as RPC
@@ -87,10 +85,10 @@ class NettyBlockTransferSecuritySuite extends SparkFunSuite with MockitoSugar wi
 
   test("security mismatch auth off on client") {
     val conf0 = new SparkConf()
-      .set(NETWORK_AUTH_ENABLED, false)
-      .set(AUTH_SECRET, "good")
+      .set("spark.authenticate", "false")
+      .set("spark.authenticate.secret", "good")
       .set("spark.app.id", "app-id")
-    val conf1 = conf0.clone.set(NETWORK_AUTH_ENABLED, true)
+    val conf1 = conf0.clone.set("spark.authenticate", "true")
     testConnection(conf0, conf1) match {
       case Success(_) => fail("Should have failed")
       case Failure(t) => t.getMessage should include ("Expected SaslMessage")
@@ -99,11 +97,11 @@ class NettyBlockTransferSecuritySuite extends SparkFunSuite with MockitoSugar wi
 
   test("security with aes encryption") {
     val conf = new SparkConf()
-      .set(NETWORK_AUTH_ENABLED, true)
-      .set(AUTH_SECRET, "good")
+      .set("spark.authenticate", "true")
+      .set("spark.authenticate.secret", "good")
       .set("spark.app.id", "app-id")
-      .set(Network.NETWORK_CRYPTO_ENABLED, true)
-      .set(Network.NETWORK_CRYPTO_SASL_FALLBACK, false)
+      .set("spark.network.crypto.enabled", "true")
+      .set("spark.network.crypto.saslFallback", "false")
     testConnection(conf, conf) match {
       case Success(_) => // expected
       case Failure(t) => fail(t)

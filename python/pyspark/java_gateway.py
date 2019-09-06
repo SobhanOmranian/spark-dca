@@ -18,6 +18,7 @@
 import atexit
 import os
 import sys
+import select
 import signal
 import shlex
 import shutil
@@ -30,27 +31,21 @@ from subprocess import Popen, PIPE
 if sys.version >= '3':
     xrange = range
 
-from py4j.java_gateway import java_import, JavaGateway, JavaObject, GatewayParameters
+from py4j.java_gateway import java_import, JavaGateway, GatewayParameters
 from pyspark.find_spark_home import _find_spark_home
 from pyspark.serializers import read_int, write_with_length, UTF8Deserializer
 from pyspark.util import _exception_message
 
 
-def launch_gateway(conf=None, popen_kwargs=None):
+def launch_gateway(conf=None):
     """
     launch jvm gateway
     :param conf: spark configuration passed to spark-submit
-    :param popen_kwargs: Dictionary of kwargs to pass to Popen when spawning
-        the py4j JVM. This is a developer feature intended for use in
-        customizing how pyspark interacts with the py4j JVM (e.g., capturing
-        stdout/stderr).
     :return:
     """
     if "PYSPARK_GATEWAY_PORT" in os.environ:
         gateway_port = int(os.environ["PYSPARK_GATEWAY_PORT"])
         gateway_secret = os.environ["PYSPARK_GATEWAY_SECRET"]
-        # Process already exists
-        proc = None
     else:
         SPARK_HOME = _find_spark_home()
         # Launch the Py4j gateway using Spark's run command so that we pick up the
@@ -81,20 +76,15 @@ def launch_gateway(conf=None, popen_kwargs=None):
             env["_PYSPARK_DRIVER_CONN_INFO_PATH"] = conn_info_file
 
             # Launch the Java gateway.
-            popen_kwargs = {} if popen_kwargs is None else popen_kwargs
             # We open a pipe to stdin so that the Java gateway can die when the pipe is broken
-            popen_kwargs['stdin'] = PIPE
-            # We always set the necessary environment variables.
-            popen_kwargs['env'] = env
             if not on_windows:
                 # Don't send ctrl-c / SIGINT to the Java gateway:
                 def preexec_func():
                     signal.signal(signal.SIGINT, signal.SIG_IGN)
-                popen_kwargs['preexec_fn'] = preexec_func
-                proc = Popen(command, **popen_kwargs)
+                proc = Popen(command, stdin=PIPE, preexec_fn=preexec_func, env=env)
             else:
                 # preexec_fn not supported on Windows
-                proc = Popen(command, **popen_kwargs)
+                proc = Popen(command, stdin=PIPE, env=env)
 
             # Wait for the file to appear, or for the process to exit, whichever happens first.
             while not proc.poll() and not os.path.isfile(conn_info_file):
@@ -129,8 +119,6 @@ def launch_gateway(conf=None, popen_kwargs=None):
     gateway = JavaGateway(
         gateway_parameters=GatewayParameters(port=gateway_port, auth_token=gateway_secret,
                                              auto_convert=True))
-    # Store a reference to the Popen object for use by the caller (e.g., in reading stdout/stderr)
-    gateway.proc = proc
 
     # Import the classes used by PySpark
     java_import(gateway.jvm, "org.apache.spark.SparkConf")
@@ -140,7 +128,6 @@ def launch_gateway(conf=None, popen_kwargs=None):
     java_import(gateway.jvm, "org.apache.spark.mllib.api.python.*")
     # TODO(davies): move into sql
     java_import(gateway.jvm, "org.apache.spark.sql.*")
-    java_import(gateway.jvm, "org.apache.spark.sql.api.python.*")
     java_import(gateway.jvm, "org.apache.spark.sql.hive.*")
     java_import(gateway.jvm, "scala.Tuple2")
 
@@ -178,7 +165,7 @@ def local_connect_and_auth(port, auth_secret):
             sock = socket.socket(af, socktype, proto)
             sock.settimeout(15)
             sock.connect(sa)
-            sockfile = sock.makefile("rwb", int(os.environ.get("SPARK_BUFFER_SIZE", 65536)))
+            sockfile = sock.makefile("rwb", 65536)
             _do_server_auth(sockfile, auth_secret)
             return (sockfile, sock)
         except socket.error as e:
@@ -186,27 +173,5 @@ def local_connect_and_auth(port, auth_secret):
             errors.append("tried to connect to %s, but an error occured: %s" % (sa, emsg))
             sock.close()
             sock = None
-    raise Exception("could not open socket: %s" % errors)
-
-
-def ensure_callback_server_started(gw):
-    """
-    Start callback server if not already started. The callback server is needed if the Java
-    driver process needs to callback into the Python driver process to execute Python code.
-    """
-
-    # getattr will fallback to JVM, so we cannot test by hasattr()
-    if "_callback_server" not in gw.__dict__ or gw._callback_server is None:
-        gw.callback_server_parameters.eager_load = True
-        gw.callback_server_parameters.daemonize = True
-        gw.callback_server_parameters.daemonize_connections = True
-        gw.callback_server_parameters.port = 0
-        gw.start_callback_server(gw.callback_server_parameters)
-        cbport = gw._callback_server.server_socket.getsockname()[1]
-        gw._callback_server.port = cbport
-        # gateway with real port
-        gw._python_proxy_port = gw._callback_server.port
-        # get the GatewayServer object in JVM by ID
-        jgws = JavaObject("GATEWAY_SERVER", gw._gateway_client)
-        # update the port of CallbackClient with real port
-        jgws.resetCallbackClient(jgws.getCallbackClient().getAddress(), gw._python_proxy_port)
+    else:
+        raise Exception("could not open socket: %s" % errors)

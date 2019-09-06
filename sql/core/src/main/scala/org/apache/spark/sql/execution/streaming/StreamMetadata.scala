@@ -19,18 +19,16 @@ package org.apache.spark.sql.execution.streaming
 
 import java.io.{InputStreamReader, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
-import java.util.ConcurrentModificationException
 
 import scala.util.control.NonFatal
 
 import org.apache.commons.io.IOUtils
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileAlreadyExistsException, FSDataInputStream, Path}
+import org.apache.hadoop.fs.{FileSystem, FSDataInputStream, FSDataOutputStream, Path}
 import org.json4s.NoTypeHints
 import org.json4s.jackson.Serialization
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.execution.streaming.CheckpointFileManager.CancellableFSDataOutputStream
 import org.apache.spark.sql.streaming.StreamingQuery
 
 /**
@@ -72,26 +70,19 @@ object StreamMetadata extends Logging {
       metadata: StreamMetadata,
       metadataFile: Path,
       hadoopConf: Configuration): Unit = {
-    var output: CancellableFSDataOutputStream = null
+    var output: FSDataOutputStream = null
     try {
-      val fileManager = CheckpointFileManager.create(metadataFile.getParent, hadoopConf)
-      output = fileManager.createAtomic(metadataFile, overwriteIfPossible = false)
+      val fs = metadataFile.getFileSystem(hadoopConf)
+      output = fs.create(metadataFile)
       val writer = new OutputStreamWriter(output)
       Serialization.write(metadata, writer)
       writer.close()
     } catch {
-      case e: FileAlreadyExistsException =>
-        if (output != null) {
-          output.cancel()
-        }
-        throw new ConcurrentModificationException(
-          s"Multiple streaming queries are concurrently using $metadataFile", e)
-      case e: Throwable =>
-        if (output != null) {
-          output.cancel()
-        }
+      case NonFatal(e) =>
         logError(s"Error writing stream metadata $metadata to $metadataFile", e)
         throw e
+    } finally {
+      IOUtils.closeQuietly(output)
     }
   }
 }

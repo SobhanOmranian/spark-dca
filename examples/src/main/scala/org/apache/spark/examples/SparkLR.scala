@@ -72,18 +72,18 @@ object SparkLR {
     val points = spark.sparkContext.parallelize(generateData, numSlices).cache()
 
     // Initialize w to a random value
-    val w = DenseVector.fill(D) {2 * rand.nextDouble - 1}
-    println(s"Initial w: $w")
+    var w = DenseVector.fill(D) {2 * rand.nextDouble - 1}
+    println("Initial w: " + w)
 
     for (i <- 1 to ITERATIONS) {
-      println(s"On iteration $i")
+      println("On iteration " + i)
       val gradient = points.map { p =>
         p.x * (1 / (1 + exp(-p.y * (w.dot(p.x)))) - 1) * p.y
       }.reduce(_ + _)
       w -= gradient
     }
 
-    println(s"Final w: $w")
+    println("Final w: " + w)
 
     spark.stop()
   }

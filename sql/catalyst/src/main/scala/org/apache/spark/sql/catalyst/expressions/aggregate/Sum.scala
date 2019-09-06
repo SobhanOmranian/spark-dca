@@ -18,24 +18,12 @@
 package org.apache.spark.sql.catalyst.expressions.aggregate
 
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
-import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.util.TypeUtils
-import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 
 @ExpressionDescription(
-  usage = "_FUNC_(expr) - Returns the sum calculated from values of a group.",
-  examples = """
-    Examples:
-      > SELECT _FUNC_(col) FROM VALUES (5), (10), (15) AS tab(col);
-       30
-      > SELECT _FUNC_(col) FROM VALUES (NULL), (10), (15) AS tab(col);
-       25
-      > SELECT _FUNC_(col) FROM VALUES (NULL), (NULL) AS tab(col);
-       NULL
-  """,
-  since = "1.0.0")
+  usage = "_FUNC_(expr) - Returns the sum calculated from values of a group.")
 case class Sum(child: Expression) extends DeclarativeAggregate with ImplicitCastInputTypes {
 
   override def children: Seq[Expression] = child :: Nil
@@ -73,12 +61,12 @@ case class Sum(child: Expression) extends DeclarativeAggregate with ImplicitCast
     if (child.nullable) {
       Seq(
         /* sum = */
-        coalesce(coalesce(sum, zero) + child.cast(sumDataType), sum)
+        Coalesce(Seq(Add(Coalesce(Seq(sum, zero)), Cast(child, sumDataType)), sum))
       )
     } else {
       Seq(
         /* sum = */
-        coalesce(sum, zero) + child.cast(sumDataType)
+        Add(Coalesce(Seq(sum, zero)), Cast(child, sumDataType))
       )
     }
   }
@@ -86,13 +74,9 @@ case class Sum(child: Expression) extends DeclarativeAggregate with ImplicitCast
   override lazy val mergeExpressions: Seq[Expression] = {
     Seq(
       /* sum = */
-      coalesce(coalesce(sum.left, zero) + sum.right, sum.left)
+      Coalesce(Seq(Add(Coalesce(Seq(sum.left, zero)), sum.right), sum.left))
     )
   }
 
-  override lazy val evaluateExpression: Expression = resultType match {
-    case d: DecimalType => CheckOverflow(sum, d, SQLConf.get.decimalOperationsNullOnOverflow)
-    case _ => sum
-  }
-
+  override lazy val evaluateExpression: Expression = sum
 }

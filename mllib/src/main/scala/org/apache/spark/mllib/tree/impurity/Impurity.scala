@@ -81,12 +81,7 @@ private[spark] abstract class ImpurityAggregator(val statsSize: Int) extends Ser
    * @param allStats  Flat stats array, with stats for this (node, feature, bin) contiguous.
    * @param offset    Start index of stats for this (node, feature, bin).
    */
-  def update(
-      allStats: Array[Double],
-      offset: Int,
-      label: Double,
-      numSamples: Int,
-      sampleWeight: Double): Unit
+  def update(allStats: Array[Double], offset: Int, label: Double, instanceWeight: Double): Unit
 
   /**
    * Get an [[ImpurityCalculator]] for a (node, feature, bin).
@@ -127,7 +122,6 @@ private[spark] abstract class ImpurityCalculator(val stats: Array[Double]) exten
       stats(i) += other.stats(i)
       i += 1
     }
-    rawCount += other.rawCount
     this
   }
 
@@ -145,19 +139,13 @@ private[spark] abstract class ImpurityCalculator(val stats: Array[Double]) exten
       stats(i) -= other.stats(i)
       i += 1
     }
-    rawCount -= other.rawCount
     this
   }
 
   /**
-   * Weighted number of data points accounted for in the sufficient statistics.
+   * Number of data points accounted for in the sufficient statistics.
    */
-  def count: Double
-
-  /**
-   * Raw number of data points accounted for in the sufficient statistics.
-   */
-  var rawCount: Long
+  def count: Long
 
   /**
    * Prediction which should be made based on the sufficient statistics.
@@ -174,7 +162,7 @@ private[spark] abstract class ImpurityCalculator(val stats: Array[Double]) exten
    * Fails if the array is empty.
    */
   protected def indexOfLargestArrayElement(array: Array[Double]): Int = {
-    val result = array.foldLeft((-1, Double.MinValue, 0)) {
+    val result = array.foldLeft(-1, Double.MinValue, 0) {
       case ((maxIndex, maxValue, currentIndex), currentValue) =>
         if (currentValue > maxValue) {
           (currentIndex, currentValue, currentIndex + 1)
@@ -197,14 +185,11 @@ private[spark] object ImpurityCalculator {
    * Create an [[ImpurityCalculator]] instance of the given impurity type and with
    * the given stats.
    */
-  def getCalculator(
-      impurity: String,
-      stats: Array[Double],
-      rawCount: Long): ImpurityCalculator = {
+  def getCalculator(impurity: String, stats: Array[Double]): ImpurityCalculator = {
     impurity.toLowerCase(Locale.ROOT) match {
-      case "gini" => new GiniCalculator(stats, rawCount)
-      case "entropy" => new EntropyCalculator(stats, rawCount)
-      case "variance" => new VarianceCalculator(stats, rawCount)
+      case "gini" => new GiniCalculator(stats)
+      case "entropy" => new EntropyCalculator(stats)
+      case "variance" => new VarianceCalculator(stats)
       case _ =>
         throw new IllegalArgumentException(
           s"ImpurityCalculator builder did not recognize impurity type: $impurity")

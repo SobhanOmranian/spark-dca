@@ -17,24 +17,25 @@
 package org.apache.spark.sql.catalyst.expressions.aggregate
 
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, JoinedRow, SafeProjection}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, JoinedRow}
+import org.apache.spark.sql.catalyst.expressions.codegen.GenerateSafeProjection
 
 /**
  * Evaluator for a [[DeclarativeAggregate]].
  */
 case class DeclarativeAggregateEvaluator(function: DeclarativeAggregate, input: Seq[Attribute]) {
 
-  lazy val initializer = SafeProjection.create(function.initialValues)
+  lazy val initializer = GenerateSafeProjection.generate(function.initialValues)
 
-  lazy val updater = SafeProjection.create(
+  lazy val updater = GenerateSafeProjection.generate(
     function.updateExpressions,
     function.aggBufferAttributes ++ input)
 
-  lazy val merger = SafeProjection.create(
+  lazy val merger = GenerateSafeProjection.generate(
     function.mergeExpressions,
     function.aggBufferAttributes ++ function.inputAggBufferAttributes)
 
-  lazy val evaluator = SafeProjection.create(
+  lazy val evaluator = GenerateSafeProjection.generate(
     function.evaluateExpression :: Nil,
     function.aggBufferAttributes)
 

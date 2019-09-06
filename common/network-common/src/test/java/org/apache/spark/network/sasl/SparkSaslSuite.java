@@ -347,10 +347,10 @@ public class SparkSaslSuite {
     verify(handler).getStreamManager();
 
     saslHandler.channelInactive(null);
-    verify(handler).channelInactive(isNull());
+    verify(handler).channelInactive(any(TransportClient.class));
 
     saslHandler.exceptionCaught(null, null);
-    verify(handler).exceptionCaught(isNull(), isNull());
+    verify(handler).exceptionCaught(any(Throwable.class), any(TransportClient.class));
   }
 
   @Test
@@ -365,7 +365,6 @@ public class SparkSaslSuite {
 
     final TransportClient client;
     final TransportServer server;
-    final TransportContext ctx;
 
     private final boolean encrypt;
     private final boolean disableClientEncryption;
@@ -397,7 +396,7 @@ public class SparkSaslSuite {
       when(keyHolder.getSaslUser(anyString())).thenReturn("user");
       when(keyHolder.getSecretKey(anyString())).thenReturn("secret");
 
-      this.ctx = new TransportContext(conf, rpcHandler);
+      TransportContext ctx = new TransportContext(conf, rpcHandler);
 
       this.checker = new EncryptionCheckerBootstrap(SaslEncryption.ENCRYPTION_HANDLER_NAME);
 
@@ -431,9 +430,6 @@ public class SparkSaslSuite {
       }
       if (server != null) {
         server.close();
-      }
-      if (ctx != null) {
-        ctx.close();
       }
     }
 

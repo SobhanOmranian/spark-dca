@@ -36,10 +36,7 @@ import java.nio.ByteBuffer;
  */
 public abstract class ManagedBuffer {
 
-  /**
-   * Number of bytes of the data. If this buffer will decrypt for all of the views into the data,
-   * this is the size of the decrypted data.
-   */
+  /** Number of bytes of the data. */
   public abstract long size();
 
   /**

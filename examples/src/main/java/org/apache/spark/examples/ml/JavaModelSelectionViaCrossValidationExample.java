@@ -94,9 +94,7 @@ public class JavaModelSelectionViaCrossValidationExample {
     CrossValidator cv = new CrossValidator()
       .setEstimator(pipeline)
       .setEvaluator(new BinaryClassificationEvaluator())
-      .setEstimatorParamMaps(paramGrid)
-      .setNumFolds(2)  // Use 3+ in practice
-      .setParallelism(2);  // Evaluate up to 2 parameter settings in parallel
+      .setEstimatorParamMaps(paramGrid).setNumFolds(2);  // Use 3+ in practice
 
     // Run cross-validation, and choose the best set of parameters.
     CrossValidatorModel cvModel = cv.fit(training);

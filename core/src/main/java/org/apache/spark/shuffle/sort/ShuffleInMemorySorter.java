@@ -103,7 +103,7 @@ final class ShuffleInMemorySorter {
       // `allocateArray` returns. `usableCapacity` is also set to `0` to avoid any codes writing
       // data to `ShuffleInMemorySorter` when `array` is `null` (e.g., in
       // ShuffleExternalSorter.growPointerArrayIfNecessary, we may try to access
-      // `ShuffleInMemorySorter` when `allocateArray` throws SparkOutOfMemoryError).
+      // `ShuffleInMemorySorter` when `allocateArray` throws OutOfMemoryError).
       array = null;
       usableCapacity = 0;
       array = consumer.allocateArray(initialSize);

@@ -22,7 +22,7 @@ import javax.servlet.http.HttpServletRequest
 
 import scala.xml.Node
 
-import org.apache.commons.text.StringEscapeUtils
+import org.apache.commons.lang3.StringEscapeUtils
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.hive.thriftserver.HiveThriftServer2.{ExecutionInfo, ExecutionState, SessionInfo}
@@ -47,10 +47,10 @@ private[ui] class ThriftServerPage(parent: ThriftServerTab) extends WebUIPage(""
         {listener.getOnlineSessionNum} session(s) are online,
         running {listener.getTotalRunning} SQL statement(s)
         </h4> ++
-        generateSessionStatsTable(request) ++
-        generateSQLStatsTable(request)
+        generateSessionStatsTable() ++
+        generateSQLStatsTable()
       }
-    UIUtils.headerSparkPage(request, "JDBC/ODBC Server", content, parent)
+    UIUtils.headerSparkPage("JDBC/ODBC Server", content, parent, Some(5000))
   }
 
   /** Generate basic stats of the thrift server program */
@@ -67,21 +67,20 @@ private[ui] class ThriftServerPage(parent: ThriftServerTab) extends WebUIPage(""
   }
 
   /** Generate stats of batch statements of the thrift server program */
-  private def generateSQLStatsTable(request: HttpServletRequest): Seq[Node] = {
+  private def generateSQLStatsTable(): Seq[Node] = {
     val numStatement = listener.getExecutionList.size
     val table = if (numStatement > 0) {
-      val headerRow = Seq("User", "JobID", "GroupID", "Start Time", "Finish Time", "Close Time",
-        "Execution Time", "Duration", "Statement", "State", "Detail")
-      val dataRows = listener.getExecutionList.sortBy(_.startTimestamp).reverse
+      val headerRow = Seq("User", "JobID", "GroupID", "Start Time", "Finish Time", "Duration",
+        "Statement", "State", "Detail")
+      val dataRows = listener.getExecutionList
 
       def generateDataRow(info: ExecutionInfo): Seq[Node] = {
         val jobLink = info.jobId.map { id: String =>
-          <a href={"%s/jobs/job/?id=%s".format(
-            UIUtils.prependBaseUri(request, parent.basePath), id)}>
+          <a href={"%s/jobs/job?id=%s".format(UIUtils.prependBaseUri(parent.basePath), id)}>
             [{id}]
           </a>
         }
-        val detail = Option(info.detail).filter(!_.isEmpty).getOrElse(info.executePlan)
+        val detail = if (info.state == ExecutionState.FAILED) info.detail else info.executePlan
         <tr>
           <td>{info.userName}</td>
           <td>
@@ -90,9 +89,7 @@ private[ui] class ThriftServerPage(parent: ThriftServerTab) extends WebUIPage(""
           <td>{info.groupId}</td>
           <td>{formatDate(info.startTimestamp)}</td>
           <td>{if (info.finishTimestamp > 0) formatDate(info.finishTimestamp)}</td>
-          <td>{if (info.closeTimestamp > 0) formatDate(info.closeTimestamp)}</td>
-          <td>{formatDurationOption(Some(info.totalTime(info.finishTimestamp)))}</td>
-          <td>{formatDurationOption(Some(info.totalTime(info.closeTimestamp)))}</td>
+          <td>{formatDurationOption(Some(info.totalTime))}</td>
           <td>{info.statement}</td>
           <td>{info.state}</td>
           {errorMessageCell(detail)}
@@ -106,7 +103,7 @@ private[ui] class ThriftServerPage(parent: ThriftServerTab) extends WebUIPage(""
     }
 
     val content =
-      <h5 id="sqlstat">SQL Statistics ({numStatement})</h5> ++
+      <h5 id="sqlstat">SQL Statistics</h5> ++
         <div>
           <ul class="unstyled">
             {table.getOrElse("No statistics have been generated yet.")}
@@ -141,16 +138,16 @@ private[ui] class ThriftServerPage(parent: ThriftServerTab) extends WebUIPage(""
   }
 
   /** Generate stats of batch sessions of the thrift server program */
-  private def generateSessionStatsTable(request: HttpServletRequest): Seq[Node] = {
+  private def generateSessionStatsTable(): Seq[Node] = {
     val sessionList = listener.getSessionList
     val numBatches = sessionList.size
     val table = if (numBatches > 0) {
-      val dataRows = sessionList.sortBy(_.startTimestamp).reverse
+      val dataRows = sessionList
       val headerRow = Seq("User", "IP", "Session ID", "Start Time", "Finish Time", "Duration",
         "Total Execute")
       def generateDataRow(session: SessionInfo): Seq[Node] = {
-        val sessionLink = "%s/%s/session/?id=%s".format(
-          UIUtils.prependBaseUri(request, parent.basePath), parent.prefix, session.sessionId)
+        val sessionLink = "%s/%s/session?id=%s"
+          .format(UIUtils.prependBaseUri(parent.basePath), parent.prefix, session.sessionId)
         <tr>
           <td> {session.userName} </td>
           <td> {session.ip} </td>
@@ -167,7 +164,7 @@ private[ui] class ThriftServerPage(parent: ThriftServerTab) extends WebUIPage(""
     }
 
     val content =
-      <h5 id="sessionstat">Session Statistics ({numBatches})</h5> ++
+      <h5 id="sessionstat">Session Statistics</h5> ++
       <div>
         <ul class="unstyled">
           {table.getOrElse("No statistics have been generated yet.")}

@@ -33,6 +33,7 @@ from pyspark import SparkContext, since
 from pyspark.rdd import RDD, ignore_unicode_prefix
 from pyspark.mllib.common import JavaModelWrapper, callMLlibFunc, callJavaFunc, _py2java, _java2py
 from pyspark.mllib.linalg import SparseVector, _convert_to_vector, DenseVector
+from pyspark.mllib.regression import LabeledPoint
 from pyspark.mllib.stat.distribution import MultivariateGaussian
 from pyspark.mllib.util import Saveable, Loader, inherit_doc, JavaLoader, JavaSaveable
 from pyspark.streaming import DStream
@@ -130,9 +131,9 @@ class BisectingKMeans(object):
     clusters, larger clusters get higher priority.
 
     Based on
-    `Steinbach, Karypis, and Kumar, A comparison of document clustering
-    techniques, KDD Workshop on Text Mining, 2000
-    <http://glaros.dtc.umn.edu/gkhome/fetch/papers/docclusterKDDTMW00.pdf>`_.
+    U{http://glaros.dtc.umn.edu/gkhome/fetch/papers/docclusterKDDTMW00.pdf}
+    Steinbach, Karypis, and Kumar, A comparison of document clustering
+    techniques, KDD Workshop on Text Mining, 2000.
 
     .. versionadded:: 2.0.0
     """
@@ -183,7 +184,7 @@ class KMeansModel(Saveable, Loader):
     >>> model.k
     2
     >>> model.computeCost(sc.parallelize(data))
-    2.0
+    2.0000000000000004
     >>> model = KMeans.train(sc.parallelize(data), 2)
     >>> sparse_data = [
     ...     SparseVector(3, {1: 1.0}),
@@ -383,11 +384,11 @@ class GaussianMixtureModel(JavaModelWrapper, JavaSaveable, JavaLoader):
     >>> model.predict([-0.1,-0.05])
     0
     >>> softPredicted = model.predictSoft([-0.1,-0.05])
-    >>> abs(softPredicted[0] - 1.0) < 0.03
+    >>> abs(softPredicted[0] - 1.0) < 0.001
     True
-    >>> abs(softPredicted[1] - 0.0) < 0.03
+    >>> abs(softPredicted[1] - 0.0) < 0.001
     True
-    >>> abs(softPredicted[2] - 0.0) < 0.03
+    >>> abs(softPredicted[2] - 0.0) < 0.001
     True
 
     >>> path = tempfile.mkdtemp()
@@ -635,7 +636,7 @@ class PowerIterationClusteringModel(JavaModelWrapper, JavaSaveable, JavaLoader):
 class PowerIterationClustering(object):
     """
     Power Iteration Clustering (PIC), a scalable graph clustering algorithm
-    developed by [[http://www.cs.cmu.edu/~frank/papers/icml2010-pic-final.pdf Lin and Cohen]].
+    developed by [[http://www.icml2010.org/papers/387.pdf Lin and Cohen]].
     From the abstract: PIC finds a very low-dimensional embedding of a
     dataset using truncated power iteration on a normalized pair-wise
     similarity matrix of the data.
@@ -646,7 +647,7 @@ class PowerIterationClustering(object):
     @classmethod
     @since('1.5.0')
     def train(cls, rdd, k, maxIterations=100, initMode="random"):
-        r"""
+        """
         :param rdd:
           An RDD of (i, j, s\ :sub:`ij`\) tuples representing the
           affinity matrix, which is the matrix A in the PIC paper.  The
@@ -1041,19 +1042,13 @@ class LDA(object):
 
 def _test():
     import doctest
-    import numpy
     import pyspark.mllib.clustering
-    try:
-        # Numpy 1.14+ changed it's string format.
-        numpy.set_printoptions(legacy='1.13')
-    except TypeError:
-        pass
     globs = pyspark.mllib.clustering.__dict__.copy()
     globs['sc'] = SparkContext('local[4]', 'PythonTest', batchSize=2)
     (failure_count, test_count) = doctest.testmod(globs=globs, optionflags=doctest.ELLIPSIS)
     globs['sc'].stop()
     if failure_count:
-        sys.exit(-1)
+        exit(-1)
 
 
 if __name__ == "__main__":

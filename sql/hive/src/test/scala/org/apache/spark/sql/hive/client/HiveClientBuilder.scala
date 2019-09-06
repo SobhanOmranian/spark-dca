@@ -25,7 +25,9 @@ import org.apache.hadoop.util.VersionInfo
 import org.apache.spark.SparkConf
 import org.apache.spark.util.Utils
 
-private[client] object HiveClientBuilder {
+private[client] class HiveClientBuilder {
+  private val sparkConf = new SparkConf()
+
   // In order to speed up test execution during development or in Jenkins, you can specify the path
   // of an existing Ivy cache:
   private val ivyPath: Option[String] = {
@@ -46,15 +48,13 @@ private[client] object HiveClientBuilder {
   def buildClient(
       version: String,
       hadoopConf: Configuration,
-      extraConf: Map[String, String] = Map.empty,
-      sharesHadoopClasses: Boolean = true): HiveClient = {
+      extraConf: Map[String, String] = Map.empty): HiveClient = {
     IsolatedClientLoader.forVersion(
       hiveMetastoreVersion = version,
       hadoopVersion = VersionInfo.getVersion,
-      sparkConf = new SparkConf(),
+      sparkConf = sparkConf,
       hadoopConf = hadoopConf,
       config = buildConf(extraConf),
-      ivyPath = ivyPath,
-      sharesHadoopClasses = sharesHadoopClasses).createClient()
+      ivyPath = ivyPath).createClient()
   }
 }

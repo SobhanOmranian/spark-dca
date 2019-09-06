@@ -17,6 +17,8 @@
 
 package org.apache.spark.mllib.stat.test
 
+import scala.beans.BeanInfo
+
 import org.apache.spark.annotation.Since
 import org.apache.spark.internal.Logging
 import org.apache.spark.streaming.api.java.JavaDStream
@@ -30,11 +32,10 @@ import org.apache.spark.util.StatCounter
  * @param value numeric value of the observation.
  */
 @Since("1.6.0")
+@BeanInfo
 case class BinarySample @Since("1.6.0") (
     @Since("1.6.0") isExperiment: Boolean,
     @Since("1.6.0") value: Double) {
-  def getIsExperiment: Boolean = isExperiment
-  def getValue: Double = value
   override def toString: String = {
     s"($isExperiment, $value)"
   }
@@ -132,7 +133,7 @@ class StreamingTest @Since("1.6.0") () extends Logging with Serializable {
       if (time.milliseconds > data.slideDuration.milliseconds * peacePeriod) {
         rdd
       } else {
-        data.context.sparkContext.parallelize(Seq.empty)
+        data.context.sparkContext.parallelize(Seq())
       }
     }
   }

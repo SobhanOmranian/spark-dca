@@ -56,6 +56,7 @@ class MutableUnsafeRow(val writer: UnsafeRowWriter) extends BaseGenericInternalR
   // all other methods inherited from GenericMutableRow are not need
   override protected def genericGet(ordinal: Int): Any = throw new UnsupportedOperationException
   override def numFields: Int = throw new UnsupportedOperationException
+  override def copy(): InternalRow = throw new UnsupportedOperationException
 }
 
 /**
@@ -70,6 +71,7 @@ object GenerateColumnAccessor extends CodeGenerator[Seq[DataType], ColumnarItera
     val ctx = newCodeGenContext()
     val numFields = columnTypes.size
     val (initializeAccessors, extractors) = columnTypes.zipWithIndex.map { case (dt, index) =>
+      val accessorName = ctx.freshName("accessor")
       val accessorCls = dt match {
         case NullType => classOf[NullColumnAccessor].getName
         case BooleanType => classOf[BooleanColumnAccessor].getName
@@ -88,10 +90,10 @@ object GenerateColumnAccessor extends CodeGenerator[Seq[DataType], ColumnarItera
         case array: ArrayType => classOf[ArrayColumnAccessor].getName
         case t: MapType => classOf[MapColumnAccessor].getName
       }
-      val accessorName = ctx.addMutableState(accessorCls, "accessor")
+      ctx.addMutableState(accessorCls, accessorName, "")
 
       val createCode = dt match {
-        case t if CodeGenerator.isPrimitiveType(dt) =>
+        case t if ctx.isPrimitiveType(dt) =>
           s"$accessorName = new $accessorCls(ByteBuffer.wrap(buffers[$index]).order(nativeOrder));"
         case NullType | StringType | BinaryType =>
           s"$accessorName = new $accessorCls(ByteBuffer.wrap(buffers[$index]).order(nativeOrder));"
@@ -126,7 +128,9 @@ object GenerateColumnAccessor extends CodeGenerator[Seq[DataType], ColumnarItera
       } else {
         val groupedAccessorsItr = initializeAccessors.grouped(numberOfStatementsThreshold)
         val groupedExtractorsItr = extractors.grouped(numberOfStatementsThreshold)
-        val accessorNames = groupedAccessorsItr.zipWithIndex.map { case (body, i) =>
+        var groupedAccessorsLength = 0
+        groupedAccessorsItr.zipWithIndex.foreach { case (body, i) =>
+          groupedAccessorsLength += 1
           val funcName = s"accessors$i"
           val funcCode = s"""
              |private void $funcName() {
@@ -135,7 +139,7 @@ object GenerateColumnAccessor extends CodeGenerator[Seq[DataType], ColumnarItera
            """.stripMargin
           ctx.addNewFunction(funcName, funcCode)
         }
-        val extractorNames = groupedExtractorsItr.zipWithIndex.map { case (body, i) =>
+        groupedExtractorsItr.zipWithIndex.foreach { case (body, i) =>
           val funcName = s"extractors$i"
           val funcCode = s"""
              |private void $funcName() {
@@ -144,8 +148,8 @@ object GenerateColumnAccessor extends CodeGenerator[Seq[DataType], ColumnarItera
            """.stripMargin
           ctx.addNewFunction(funcName, funcCode)
         }
-        (accessorNames.map { accessorName => s"$accessorName();" }.mkString("\n"),
-         extractorNames.map { extractorName => s"$extractorName();"}.mkString("\n"))
+        ((0 to groupedAccessorsLength - 1).map { i => s"accessors$i();" }.mkString("\n"),
+         (0 to groupedAccessorsLength - 1).map { i => s"extractors$i();" }.mkString("\n"))
       }
 
     val codeBody = s"""
@@ -165,7 +169,9 @@ object GenerateColumnAccessor extends CodeGenerator[Seq[DataType], ColumnarItera
 
         private ByteOrder nativeOrder = null;
         private byte[][] buffers = null;
-        private UnsafeRowWriter rowWriter = new UnsafeRowWriter($numFields);
+        private UnsafeRow unsafeRow = new UnsafeRow($numFields);
+        private BufferHolder bufferHolder = new BufferHolder(unsafeRow);
+        private UnsafeRowWriter rowWriter = new UnsafeRowWriter(bufferHolder, $numFields);
         private MutableUnsafeRow mutableRow = null;
 
         private int currentRow = 0;
@@ -189,6 +195,8 @@ object GenerateColumnAccessor extends CodeGenerator[Seq[DataType], ColumnarItera
           this.columnIndexes = columnIndexes;
         }
 
+        ${ctx.declareAddedFunctions()}
+
         public boolean hasNext() {
           if (currentRow < numRowsInBatch) {
             return true;
@@ -210,20 +218,18 @@ object GenerateColumnAccessor extends CodeGenerator[Seq[DataType], ColumnarItera
 
         public InternalRow next() {
           currentRow += 1;
-          rowWriter.reset();
+          bufferHolder.reset();
           rowWriter.zeroOutNullBytes();
           ${extractorCalls}
-          return rowWriter.getRow();
+          unsafeRow.setTotalSize(bufferHolder.totalSize());
+          return unsafeRow;
         }
-
-        ${ctx.declareAddedFunctions()}
       }"""
 
     val code = CodeFormatter.stripOverlappingComments(
       new CodeAndComment(codeBody, ctx.getPlaceHolderToComments()))
     logDebug(s"Generated ColumnarIterator:\n${CodeFormatter.format(code)}")
 
-    val (clazz, _) = CodeGenerator.compile(code)
-    clazz.generate(Array.empty).asInstanceOf[ColumnarIterator]
+    CodeGenerator.compile(code).generate(Array.empty).asInstanceOf[ColumnarIterator]
   }
 }

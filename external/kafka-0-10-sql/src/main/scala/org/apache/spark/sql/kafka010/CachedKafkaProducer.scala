@@ -28,21 +28,18 @@ import scala.util.control.NonFatal
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
-import org.apache.spark.kafka010.{KafkaConfigUpdater, KafkaRedactionUtil}
 
 private[kafka010] object CachedKafkaProducer extends Logging {
 
   private type Producer = KafkaProducer[Array[Byte], Array[Byte]]
 
-  private val defaultCacheExpireTimeout = TimeUnit.MINUTES.toMillis(10)
-
-  private lazy val cacheExpireTimeout: Long = Option(SparkEnv.get)
-    .map(_.conf.get(PRODUCER_CACHE_TIMEOUT))
-    .getOrElse(defaultCacheExpireTimeout)
+  private lazy val cacheExpireTimeout: Long =
+    SparkEnv.get.conf.getTimeAsMs("spark.kafka.producer.cache.timeout", "10m")
 
   private val cacheLoader = new CacheLoader[Seq[(String, Object)], Producer] {
     override def load(config: Seq[(String, Object)]): Producer = {
-      createKafkaProducer(config)
+      val configMap = config.map(x => x._1 -> x._2).toMap.asJava
+      createKafkaProducer(configMap)
     }
   }
 
@@ -51,11 +48,8 @@ private[kafka010] object CachedKafkaProducer extends Logging {
         notification: RemovalNotification[Seq[(String, Object)], Producer]): Unit = {
       val paramsSeq: Seq[(String, Object)] = notification.getKey
       val producer: Producer = notification.getValue
-      if (log.isDebugEnabled()) {
-        val redactedParamsSeq = KafkaRedactionUtil.redactParams(paramsSeq)
-        logDebug(s"Evicting kafka producer $producer params: $redactedParamsSeq, " +
-          s"due to ${notification.getCause}")
-      }
+      logDebug(
+        s"Evicting kafka producer $producer params: $paramsSeq, due to ${notification.getCause}")
       close(paramsSeq, producer)
     }
   }
@@ -65,12 +59,9 @@ private[kafka010] object CachedKafkaProducer extends Logging {
       .removalListener(removalListener)
       .build[Seq[(String, Object)], Producer](cacheLoader)
 
-  private def createKafkaProducer(paramsSeq: Seq[(String, Object)]): Producer = {
-    val kafkaProducer: Producer = new Producer(paramsSeq.toMap.asJava)
-    if (log.isDebugEnabled()) {
-      val redactedParamsSeq = KafkaRedactionUtil.redactParams(paramsSeq)
-      logDebug(s"Created a new instance of KafkaProducer for $redactedParamsSeq.")
-    }
+  private def createKafkaProducer(producerConfiguration: ju.Map[String, Object]): Producer = {
+    val kafkaProducer: Producer = new Producer(producerConfiguration)
+    logDebug(s"Created a new instance of KafkaProducer for $producerConfiguration.")
     kafkaProducer
   }
 
@@ -80,11 +71,7 @@ private[kafka010] object CachedKafkaProducer extends Logging {
    * one instance per specified kafkaParams.
    */
   private[kafka010] def getOrCreate(kafkaParams: ju.Map[String, Object]): Producer = {
-    val updatedKafkaProducerConfiguration =
-      KafkaConfigUpdater("executor", kafkaParams.asScala.toMap)
-        .setAuthenticationConfigIfNeeded()
-        .build()
-    val paramsSeq: Seq[(String, Object)] = paramsToSeq(updatedKafkaProducerConfiguration)
+    val paramsSeq: Seq[(String, Object)] = paramsToSeq(kafkaParams)
     try {
       guavaCache.get(paramsSeq)
     } catch {
@@ -108,17 +95,14 @@ private[kafka010] object CachedKafkaProducer extends Logging {
   /** Auto close on cache evict */
   private def close(paramsSeq: Seq[(String, Object)], producer: Producer): Unit = {
     try {
-      if (log.isInfoEnabled()) {
-        val redactedParamsSeq = KafkaRedactionUtil.redactParams(paramsSeq)
-        logInfo(s"Closing the KafkaProducer with params: ${redactedParamsSeq.mkString("\n")}.")
-      }
+      logInfo(s"Closing the KafkaProducer with params: ${paramsSeq.mkString("\n")}.")
       producer.close()
     } catch {
       case NonFatal(e) => logWarning("Error while closing kafka producer.", e)
     }
   }
 
-  private[kafka010] def clear(): Unit = {
+  private def clear(): Unit = {
     logInfo("Cleaning up guava cache.")
     guavaCache.invalidateAll()
   }

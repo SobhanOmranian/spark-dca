@@ -16,8 +16,7 @@
  */
 package org.apache.spark.sql.catalyst.parser
 
-import org.antlr.v4.runtime.{CharStreams, CommonTokenStream, ParserRuleContext}
-import scala.collection.JavaConverters._
+import org.antlr.v4.runtime.{CommonTokenStream, ParserRuleContext}
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.parser.SqlBaseParser._
@@ -58,7 +57,7 @@ class ParserUtilsSuite extends SparkFunSuite {
   }
 
   private def buildContext[T](command: String)(toResult: SqlBaseParser => T): T = {
-    val lexer = new SqlBaseLexer(new UpperCaseCharStream(CharStreams.fromString(command)))
+    val lexer = new SqlBaseLexer(new ANTLRNoCaseStringStream(command))
     val tokenStream = new CommonTokenStream(lexer)
     val parser = new SqlBaseParser(tokenStream)
     toResult(parser)
@@ -153,14 +152,14 @@ class ParserUtilsSuite extends SparkFunSuite {
     assert(string(showDbsContext.pattern) == "identifier_with_wildcards")
     assert(string(createDbContext.comment) == "database_comment")
 
-    assert(string(createDbContext.locationSpec.asScala.head.STRING) == "/home/user/db")
+    assert(string(createDbContext.locationSpec.STRING) == "/home/user/db")
   }
 
   test("position") {
     assert(position(setConfContext.start) == Origin(Some(1), Some(0)))
     assert(position(showFuncContext.stop) == Origin(Some(1), Some(19)))
     assert(position(descFuncContext.describeFuncName.start) == Origin(Some(1), Some(27)))
-    assert(position(createDbContext.locationSpec.asScala.head.start) == Origin(Some(3), Some(27)))
+    assert(position(createDbContext.locationSpec.start) == Origin(Some(3), Some(27)))
     assert(position(emptyContext.stop) == Origin(None, None))
   }
 
@@ -178,7 +177,7 @@ class ParserUtilsSuite extends SparkFunSuite {
   }
 
   test("withOrigin") {
-    val ctx = createDbContext.locationSpec.asScala.head
+    val ctx = createDbContext.locationSpec
     val current = CurrentOrigin.get
     val (location, origin) = withOrigin(ctx) {
       (string(ctx.STRING), CurrentOrigin.get)

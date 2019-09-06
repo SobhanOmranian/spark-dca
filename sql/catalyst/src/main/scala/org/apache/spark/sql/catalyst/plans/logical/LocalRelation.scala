@@ -21,7 +21,7 @@ import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow}
 import org.apache.spark.sql.catalyst.analysis
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Literal}
-import org.apache.spark.sql.catalyst.plans.logical.statsEstimation.EstimationUtils
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{StructField, StructType}
 
 object LocalRelation {
@@ -44,17 +44,7 @@ object LocalRelation {
   }
 }
 
-/**
- * Logical plan node for scanning data from a local collection.
- *
- * @param data The local collection holding the data. It doesn't need to be sent to executors
- *             and then doesn't need to be serializable.
- */
-case class LocalRelation(
-    output: Seq[Attribute],
-    data: Seq[InternalRow] = Nil,
-    // Indicates whether this relation has data from a streaming source.
-    override val isStreaming: Boolean = false)
+case class LocalRelation(output: Seq[Attribute], data: Seq[InternalRow] = Nil)
   extends LeafNode with analysis.MultiInstanceRelation {
 
   // A local relation must have resolved output.
@@ -66,7 +56,7 @@ case class LocalRelation(
    * query.
    */
   override final def newInstance(): this.type = {
-    LocalRelation(output.map(_.newInstance()), data, isStreaming).asInstanceOf[this.type]
+    LocalRelation(output.map(_.newInstance()), data).asInstanceOf[this.type]
   }
 
   override protected def stringArgs: Iterator[Any] = {
@@ -77,8 +67,9 @@ case class LocalRelation(
     }
   }
 
-  override def computeStats(): Statistics =
-    Statistics(sizeInBytes = EstimationUtils.getSizePerRow(output) * data.length)
+  override def computeStats(conf: SQLConf): Statistics =
+    Statistics(sizeInBytes =
+      output.map(n => BigInt(n.dataType.defaultSize)).sum * data.length)
 
   def toSQL(inlineTableName: String): String = {
     require(data.nonEmpty)

@@ -45,12 +45,6 @@ trait MultivariateStatisticalSummary {
   def count: Long
 
   /**
-   * Sum of weights.
-   */
-  @Since("3.0.0")
-  def weightSum: Double
-
-  /**
    * Number of nonzero elements (including explicitly presented zero values) in each column.
    */
   @Since("1.0.0")

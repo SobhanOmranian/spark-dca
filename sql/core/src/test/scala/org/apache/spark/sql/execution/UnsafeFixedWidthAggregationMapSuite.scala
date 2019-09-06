@@ -27,11 +27,10 @@ import org.mockito.Mockito._
 import org.scalatest.Matchers
 
 import org.apache.spark.{SparkConf, SparkFunSuite, TaskContext, TaskContextImpl}
-import org.apache.spark.internal.config.MEMORY_OFFHEAP_ENABLED
 import org.apache.spark.memory.{TaskMemoryManager, TestMemoryManager}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
@@ -43,7 +42,7 @@ import org.apache.spark.unsafe.types.UTF8String
 class UnsafeFixedWidthAggregationMapSuite
   extends SparkFunSuite
   with Matchers
-  with SharedSparkSession {
+  with SharedSQLContext {
 
   import UnsafeFixedWidthAggregationMap._
 
@@ -67,7 +66,7 @@ class UnsafeFixedWidthAggregationMapSuite
     }
 
     test(name) {
-      val conf = new SparkConf().set(MEMORY_OFFHEAP_ENABLED.key, "false")
+      val conf = new SparkConf().set("spark.memory.offHeap.enabled", "false")
       memoryManager = new TestMemoryManager(conf)
       taskMemoryManager = new TaskMemoryManager(memoryManager, 0)
       taskContext = mock(classOf[TaskContext])
@@ -118,7 +117,8 @@ class UnsafeFixedWidthAggregationMapSuite
       groupKeySchema,
       taskContext,
       1024, // initial capacity,
-      PAGE_SIZE_BYTES
+      PAGE_SIZE_BYTES,
+      false // disable perf metrics
     )
     assert(!map.iterator().next())
     map.free()
@@ -131,13 +131,13 @@ class UnsafeFixedWidthAggregationMapSuite
       groupKeySchema,
       taskContext,
       1024, // initial capacity
-      PAGE_SIZE_BYTES
+      PAGE_SIZE_BYTES,
+      false // disable perf metrics
     )
     val groupKey = InternalRow(UTF8String.fromString("cats"))
-    val row = map.getAggregationBuffer(groupKey)
 
     // Looking up a key stores a zero-entry in the map (like Python Counters or DefaultDicts)
-    assert(row != null)
+    assert(map.getAggregationBuffer(groupKey) != null)
     val iter = map.iterator()
     assert(iter.next())
     iter.getKey.getString(0) should be ("cats")
@@ -146,7 +146,7 @@ class UnsafeFixedWidthAggregationMapSuite
 
     // Modifications to rows retrieved from the map should update the values in the map
     iter.getValue.setInt(0, 42)
-    row.getInt(0) should be (42)
+    map.getAggregationBuffer(groupKey).getInt(0) should be (42)
 
     map.free()
   }
@@ -158,7 +158,8 @@ class UnsafeFixedWidthAggregationMapSuite
       groupKeySchema,
       taskContext,
       128, // initial capacity
-      PAGE_SIZE_BYTES
+      PAGE_SIZE_BYTES,
+      false // disable perf metrics
     )
     val rand = new Random(42)
     val groupKeys: Set[String] = Seq.fill(512)(rand.nextString(1024)).toSet
@@ -183,7 +184,8 @@ class UnsafeFixedWidthAggregationMapSuite
       groupKeySchema,
       taskContext,
       128, // initial capacity
-      PAGE_SIZE_BYTES
+      PAGE_SIZE_BYTES,
+      false // disable perf metrics
     )
 
     val keys = randomStrings(1024).take(512)
@@ -230,7 +232,8 @@ class UnsafeFixedWidthAggregationMapSuite
       groupKeySchema,
       taskContext,
       128, // initial capacity
-      PAGE_SIZE_BYTES
+      PAGE_SIZE_BYTES,
+      false // disable perf metrics
     )
     val sorter = map.destructAndCreateExternalSorter()
 
@@ -270,7 +273,8 @@ class UnsafeFixedWidthAggregationMapSuite
       StructType(Nil),
       taskContext,
       128, // initial capacity
-      PAGE_SIZE_BYTES
+      PAGE_SIZE_BYTES,
+      false // disable perf metrics
     )
     (1 to 10).foreach { i =>
       val buf = map.getAggregationBuffer(UnsafeRow.createFromByteArray(0, 0))
@@ -314,7 +318,8 @@ class UnsafeFixedWidthAggregationMapSuite
       groupKeySchema,
       taskContext,
       128, // initial capacity
-      pageSize
+      pageSize,
+      false // disable perf metrics
     )
 
     val rand = new Random(42)
@@ -351,7 +356,8 @@ class UnsafeFixedWidthAggregationMapSuite
       groupKeySchema,
       taskContext,
       128, // initial capacity
-      pageSize
+      pageSize,
+      false // disable perf metrics
     )
 
     val rand = new Random(42)

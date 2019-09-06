@@ -53,7 +53,7 @@ abstract class LauncherConnection implements Closeable, Runnable {
   public void run() {
     try {
       FilteredObjectInputStream in = new FilteredObjectInputStream(socket.getInputStream());
-      while (isOpen()) {
+      while (!closed) {
         Message msg = (Message) in.readObject();
         handle(msg);
       }
@@ -95,15 +95,15 @@ abstract class LauncherConnection implements Closeable, Runnable {
   }
 
   @Override
-  public synchronized void close() throws IOException {
-    if (isOpen()) {
-      closed = true;
-      socket.close();
+  public void close() throws IOException {
+    if (!closed) {
+      synchronized (this) {
+        if (!closed) {
+          closed = true;
+          socket.close();
+        }
+      }
     }
-  }
-
-  boolean isOpen() {
-    return !closed;
   }
 
 }

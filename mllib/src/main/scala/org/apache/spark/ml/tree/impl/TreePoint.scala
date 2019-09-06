@@ -17,7 +17,7 @@
 
 package org.apache.spark.ml.tree.impl
 
-import org.apache.spark.ml.feature.Instance
+import org.apache.spark.ml.feature.LabeledPoint
 import org.apache.spark.ml.tree.{ContinuousSplit, Split}
 import org.apache.spark.rdd.RDD
 
@@ -36,12 +36,10 @@ import org.apache.spark.rdd.RDD
  * @param label  Label from LabeledPoint
  * @param binnedFeatures  Binned feature values.
  *                        Same length as LabeledPoint.features, but values are bin indices.
- * @param weight Sample weight for this TreePoint.
  */
-private[spark] class TreePoint(
-    val label: Double,
-    val binnedFeatures: Array[Int],
-    val weight: Double) extends Serializable
+private[spark] class TreePoint(val label: Double, val binnedFeatures: Array[Int])
+  extends Serializable {
+}
 
 private[spark] object TreePoint {
 
@@ -54,7 +52,7 @@ private[spark] object TreePoint {
    * @return  TreePoint dataset representation
    */
   def convertToTreeRDD(
-      input: RDD[Instance],
+      input: RDD[LabeledPoint],
       splits: Array[Array[Split]],
       metadata: DecisionTreeMetadata): RDD[TreePoint] = {
     // Construct arrays for featureArity for efficiency in the inner loop.
@@ -84,18 +82,18 @@ private[spark] object TreePoint {
    *                      for categorical features.
    */
   private def labeledPointToTreePoint(
-      instance: Instance,
+      labeledPoint: LabeledPoint,
       thresholds: Array[Array[Double]],
       featureArity: Array[Int]): TreePoint = {
-    val numFeatures = instance.features.size
+    val numFeatures = labeledPoint.features.size
     val arr = new Array[Int](numFeatures)
     var featureIndex = 0
     while (featureIndex < numFeatures) {
       arr(featureIndex) =
-        findBin(featureIndex, instance, featureArity(featureIndex), thresholds(featureIndex))
+        findBin(featureIndex, labeledPoint, featureArity(featureIndex), thresholds(featureIndex))
       featureIndex += 1
     }
-    new TreePoint(instance.label, arr, instance.weight)
+    new TreePoint(labeledPoint.label, arr)
   }
 
   /**
@@ -108,10 +106,10 @@ private[spark] object TreePoint {
    */
   private def findBin(
       featureIndex: Int,
-      instance: Instance,
+      labeledPoint: LabeledPoint,
       featureArity: Int,
       thresholds: Array[Double]): Int = {
-    val featureValue = instance.features(featureIndex)
+    val featureValue = labeledPoint.features(featureIndex)
 
     if (featureArity == 0) {
       val idx = java.util.Arrays.binarySearch(thresholds, featureValue)
@@ -127,7 +125,7 @@ private[spark] object TreePoint {
           s"DecisionTree given invalid data:" +
             s" Feature $featureIndex is categorical with values in {0,...,${featureArity - 1}," +
             s" but a data point gives it value $featureValue.\n" +
-            s"  Bad data point: $instance")
+            "  Bad data point: " + labeledPoint.toString)
       }
       featureValue.toInt
     }

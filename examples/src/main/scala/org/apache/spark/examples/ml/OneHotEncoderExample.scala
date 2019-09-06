@@ -19,7 +19,7 @@
 package org.apache.spark.examples.ml
 
 // $example on$
-import org.apache.spark.ml.feature.OneHotEncoder
+import org.apache.spark.ml.feature.{OneHotEncoder, StringIndexer}
 // $example off$
 import org.apache.spark.sql.SparkSession
 
@@ -30,23 +30,27 @@ object OneHotEncoderExample {
       .appName("OneHotEncoderExample")
       .getOrCreate()
 
-    // Note: categorical features are usually first encoded with StringIndexer
     // $example on$
     val df = spark.createDataFrame(Seq(
-      (0.0, 1.0),
-      (1.0, 0.0),
-      (2.0, 1.0),
-      (0.0, 2.0),
-      (0.0, 1.0),
-      (2.0, 0.0)
-    )).toDF("categoryIndex1", "categoryIndex2")
+      (0, "a"),
+      (1, "b"),
+      (2, "c"),
+      (3, "a"),
+      (4, "a"),
+      (5, "c")
+    )).toDF("id", "category")
+
+    val indexer = new StringIndexer()
+      .setInputCol("category")
+      .setOutputCol("categoryIndex")
+      .fit(df)
+    val indexed = indexer.transform(df)
 
     val encoder = new OneHotEncoder()
-      .setInputCols(Array("categoryIndex1", "categoryIndex2"))
-      .setOutputCols(Array("categoryVec1", "categoryVec2"))
-    val model = encoder.fit(df)
+      .setInputCol("categoryIndex")
+      .setOutputCol("categoryVec")
 
-    val encoded = model.transform(df)
+    val encoded = encoder.transform(indexed)
     encoded.show()
     // $example off$
 

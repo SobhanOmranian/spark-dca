@@ -21,12 +21,12 @@
   <modelVersion>4.0.0</modelVersion>
   <parent>
     <groupId>org.apache.spark</groupId>
-    <artifactId>spark-parent_2.12</artifactId>
-    <version>3.0.0-SNAPSHOT</version>
+    <artifactId>spark-parent_2.11</artifactId>
+    <version>2.2.4-SNAPSHOT</version>
     <relativePath>../../pom.xml</relativePath>
   </parent>
 
-  <artifactId>spark-network-common_2.12</artifactId>
+  <artifactId>spark-network-common_2.11</artifactId>
   <packaging>jar</packaging>
   <name>Spark Project Networking</name>
   <url>http://spark.apache.org/</url>
@@ -61,11 +61,6 @@
       <artifactId>jackson-annotations</artifactId>
     </dependency>
 
-    <dependency>
-      <groupId>io.dropwizard.metrics</groupId>
-      <artifactId>metrics-core</artifactId>
-    </dependency>
-
     <!-- Provided dependencies -->
     <dependency>
       <groupId>org.slf4j</groupId>
@@ -87,13 +82,6 @@
     </dependency>
 
     <!-- Test dependencies -->
-    <!-- SPARK-28932 This is required in JDK11 -->
-    <dependency>
-      <groupId>org.scala-lang</groupId>
-      <artifactId>scala-library</artifactId>
-      <version>${scala.version}</version>
-      <scope>test</scope>
-    </dependency>
     <dependency>
       <groupId>log4j</groupId>
       <artifactId>log4j</artifactId>
@@ -138,7 +126,7 @@
         <artifactId>maven-jar-plugin</artifactId>
         <executions>
           <execution>
-            <id>prepare-test-jar</id>
+            <id>test-jar-on-test-compile</id>
             <phase>test-compile</phase>
             <goals>
               <goal>test-jar</goal>

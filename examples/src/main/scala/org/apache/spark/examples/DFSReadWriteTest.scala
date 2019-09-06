@@ -22,9 +22,6 @@ import java.io.File
 
 import scala.io.Source._
 
-import org.apache.hadoop.fs.FileSystem
-import org.apache.hadoop.fs.Path
-
 import org.apache.spark.sql.SparkSession
 
 /**
@@ -52,10 +49,12 @@ object DFSReadWriteTest {
   }
 
   private def printUsage(): Unit = {
-    val usage = """DFS Read-Write Test
-    |Usage: localFile dfsDir
-    |localFile - (string) local file to use in test
-    |dfsDir - (string) DFS directory for read/write tests""".stripMargin
+    val usage: String = "DFS Read-Write Test\n" +
+    "\n" +
+    "Usage: localFile dfsDir\n" +
+    "\n" +
+    "localFile - (string) local file to use in test\n" +
+    "dfsDir - (string) DFS directory for read/write tests\n"
 
     println(usage)
   }
@@ -70,13 +69,13 @@ object DFSReadWriteTest {
 
     localFilePath = new File(args(i))
     if (!localFilePath.exists) {
-      System.err.println(s"Given path (${args(i)}) does not exist")
+      System.err.println("Given path (" + args(i) + ") does not exist.\n")
       printUsage()
       System.exit(1)
     }
 
     if (!localFilePath.isFile) {
-      System.err.println(s"Given path (${args(i)}) is not a file")
+      System.err.println("Given path (" + args(i) + ") is not a file.\n")
       printUsage()
       System.exit(1)
     }
@@ -109,14 +108,7 @@ object DFSReadWriteTest {
       .getOrCreate()
 
     println("Writing local file to DFS")
-    val dfsFilename = s"$dfsDirPath/dfs_read_write_test"
-
-    // delete file if exists
-    val fs = FileSystem.get(spark.sessionState.newHadoopConf())
-    if (fs.exists(new Path(dfsFilename))) {
-        fs.delete(new Path(dfsFilename), true)
-    }
-
+    val dfsFilename = dfsDirPath + "/dfs_read_write_test"
     val fileRDD = spark.sparkContext.parallelize(fileContents)
     fileRDD.saveAsTextFile(dfsFilename)
 
@@ -133,13 +125,15 @@ object DFSReadWriteTest {
       .sum
 
     spark.stop()
+
     if (localWordCount == dfsWordCount) {
-      println(s"Success! Local Word Count $localWordCount and " +
-        s"DFS Word Count $dfsWordCount agree.")
+      println(s"Success! Local Word Count ($localWordCount) " +
+        s"and DFS Word Count ($dfsWordCount) agree.")
     } else {
-      println(s"Failure! Local Word Count $localWordCount " +
-        s"and DFS Word Count $dfsWordCount disagree.")
+      println(s"Failure! Local Word Count ($localWordCount) " +
+        s"and DFS Word Count ($dfsWordCount) disagree.")
     }
+
   }
 }
 // scalastyle:on println

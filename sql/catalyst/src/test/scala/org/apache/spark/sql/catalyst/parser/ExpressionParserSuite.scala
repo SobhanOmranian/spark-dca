@@ -17,14 +17,12 @@
 package org.apache.spark.sql.catalyst.parser
 
 import java.sql.{Date, Timestamp}
-import java.time.LocalDateTime
-import java.util.concurrent.TimeUnit
 
 import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.analysis.{UnresolvedAttribute, _}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate.{First, Last}
-import org.apache.spark.sql.catalyst.util.DateTimeTestUtils
+import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.CalendarInterval
@@ -37,7 +35,8 @@ import org.apache.spark.unsafe.types.CalendarInterval
  * structure needs to be valid. Unsound expressions should be caught by the Analyzer or
  * CheckAnalysis classes.
  */
-class ExpressionParserSuite extends AnalysisTest {
+class ExpressionParserSuite extends PlanTest {
+  import CatalystSqlParser._
   import org.apache.spark.sql.catalyst.dsl.expressions._
   import org.apache.spark.sql.catalyst.dsl.plans._
 
@@ -50,14 +49,11 @@ class ExpressionParserSuite extends AnalysisTest {
     compareExpressions(parser.parseExpression(sqlCommand), e)
   }
 
-  private def intercept(sqlCommand: String, messages: String*): Unit =
-    interceptParseException(defaultParser.parseExpression)(sqlCommand, messages: _*)
-
-  def assertEval(
-      sqlCommand: String,
-      expect: Any,
-      parser: ParserInterface = defaultParser): Unit = {
-    assert(parser.parseExpression(sqlCommand).eval() === expect)
+  def intercept(sqlCommand: String, messages: String*): Unit = {
+    val e = intercept[ParseException](defaultParser.parseExpression(sqlCommand))
+    messages.foreach { message =>
+      assert(e.message.contains(message))
+    }
   }
 
   test("star expressions") {
@@ -158,19 +154,7 @@ class ExpressionParserSuite extends AnalysisTest {
   test("in sub-query") {
     assertEqual(
       "a in (select b from c)",
-      InSubquery(Seq('a), ListQuery(table("c").select('b))))
-
-    assertEqual(
-      "(a, b, c) in (select d, e, f from g)",
-      InSubquery(Seq('a, 'b, 'c), ListQuery(table("g").select('d, 'e, 'f))))
-
-    assertEqual(
-      "(a, b) in (select c from d)",
-      InSubquery(Seq('a, 'b), ListQuery(table("d").select('c))))
-
-    assertEqual(
-      "(a) in (select b from c)",
-      InSubquery(Seq('a), ListQuery(table("c").select('b))))
+      In('a, Seq(ListQuery(table("c").select('b)))))
   }
 
   test("like expressions") {
@@ -198,16 +182,11 @@ class ExpressionParserSuite extends AnalysisTest {
     assertEqual("a = b is not null", ('a === 'b).isNotNull)
   }
 
-  test("is distinct expressions") {
-    assertEqual("a is distinct from b", !('a <=> 'b))
-    assertEqual("a is not distinct from b", 'a <=> 'b)
-  }
-
   test("binary arithmetic expressions") {
     // Simple operations
     assertEqual("a * b", 'a * 'b)
     assertEqual("a / b", 'a / 'b)
-    assertEqual("a DIV b", 'a div 'b)
+    assertEqual("a DIV b", ('a / 'b).cast(LongType))
     assertEqual("a % b", 'a % 'b)
     assertEqual("a + b", 'a + 'b)
     assertEqual("a - b", 'a - 'b)
@@ -218,7 +197,7 @@ class ExpressionParserSuite extends AnalysisTest {
     // Check precedences
     assertEqual(
       "a * t | b ^ c & d - e + f % g DIV h / i * k",
-      'a * 't | ('b ^ ('c & ('d - 'e + (('f % 'g div 'h) / 'i * 'k)))))
+      'a * 't | ('b ^ ('c & ('d - 'e + (('f % 'g / 'h).cast(LongType) / 'i * 'k)))))
   }
 
   test("unary arithmetic expressions") {
@@ -250,13 +229,6 @@ class ExpressionParserSuite extends AnalysisTest {
     intercept("foo(a x)", "extraneous input 'x'")
   }
 
-  private def lv(s: Symbol) = UnresolvedNamedLambdaVariable(Seq(s.name))
-
-  test("lambda functions") {
-    assertEqual("x -> x + 1", LambdaFunction(lv('x) + 1, Seq(lv('x))))
-    assertEqual("(x, y) -> x + y", LambdaFunction(lv('x) + lv('y), Seq(lv('x), lv('y))))
-  }
-
   test("window function expressions") {
     val func = 'foo.function(star())
     def windowed(
@@ -272,8 +244,8 @@ class ExpressionParserSuite extends AnalysisTest {
     assertEqual("foo(*) over (partition by a, b)", windowed(Seq('a, 'b)))
     assertEqual("foo(*) over (distribute by a, b)", windowed(Seq('a, 'b)))
     assertEqual("foo(*) over (cluster by a, b)", windowed(Seq('a, 'b)))
-    assertEqual("foo(*) over (order by a desc, b asc)", windowed(Seq.empty, Seq('a.desc, 'b.asc)))
-    assertEqual("foo(*) over (sort by a desc, b asc)", windowed(Seq.empty, Seq('a.desc, 'b.asc)))
+    assertEqual("foo(*) over (order by a desc, b asc)", windowed(Seq.empty, Seq('a.desc, 'b.asc )))
+    assertEqual("foo(*) over (sort by a desc, b asc)", windowed(Seq.empty, Seq('a.desc, 'b.asc )))
     assertEqual("foo(*) over (partition by a, b order by c)", windowed(Seq('a, 'b), Seq('c.asc)))
     assertEqual("foo(*) over (distribute by a, b sort by c)", windowed(Seq('a, 'b), Seq('c.asc)))
 
@@ -286,62 +258,20 @@ class ExpressionParserSuite extends AnalysisTest {
       "sum(product + 1) over (partition by ((product / 2) + 1) order by 2)",
       WindowExpression('sum.function('product + 1),
         WindowSpecDefinition(Seq('product / 2 + 1), Seq(Literal(2).asc), UnspecifiedFrame)))
-  }
 
-  test("range/rows window function expressions") {
-    val func = 'foo.function(star())
-    def windowed(
-        partitioning: Seq[Expression] = Seq.empty,
-        ordering: Seq[SortOrder] = Seq.empty,
-        frame: WindowFrame = UnspecifiedFrame): Expression = {
-      WindowExpression(func, WindowSpecDefinition(partitioning, ordering, frame))
-    }
-
+    // Range/Row
     val frameTypes = Seq(("rows", RowFrame), ("range", RangeFrame))
     val boundaries = Seq(
-      // No between combinations
+      ("10 preceding", ValuePreceding(10), CurrentRow),
+      ("3 + 1 following", ValueFollowing(4), CurrentRow), // Will fail during analysis
       ("unbounded preceding", UnboundedPreceding, CurrentRow),
-      ("2147483648 preceding", -Literal(2147483648L), CurrentRow),
-      ("10 preceding", -Literal(10), CurrentRow),
-      ("3 + 1 preceding", -Add(Literal(3), Literal(1)), CurrentRow),
-      ("0 preceding", -Literal(0), CurrentRow),
-      ("current row", CurrentRow, CurrentRow),
-      ("0 following", Literal(0), CurrentRow),
-      ("3 + 1 following", Add(Literal(3), Literal(1)), CurrentRow),
-      ("10 following", Literal(10), CurrentRow),
-      ("2147483649 following", Literal(2147483649L), CurrentRow),
       ("unbounded following", UnboundedFollowing, CurrentRow), // Will fail during analysis
-
-      // Between combinations
-      ("between unbounded preceding and 5 following",
-        UnboundedPreceding, Literal(5)),
-      ("between unbounded preceding and 3 + 1 following",
-        UnboundedPreceding, Add(Literal(3), Literal(1))),
-      ("between unbounded preceding and 2147483649 following",
-        UnboundedPreceding, Literal(2147483649L)),
       ("between unbounded preceding and current row", UnboundedPreceding, CurrentRow),
-      ("between 2147483648 preceding and current row", -Literal(2147483648L), CurrentRow),
-      ("between 10 preceding and current row", -Literal(10), CurrentRow),
-      ("between 3 + 1 preceding and current row", -Add(Literal(3), Literal(1)), CurrentRow),
-      ("between 0 preceding and current row", -Literal(0), CurrentRow),
-      ("between current row and current row", CurrentRow, CurrentRow),
-      ("between current row and 0 following", CurrentRow, Literal(0)),
-      ("between current row and 5 following", CurrentRow, Literal(5)),
-      ("between current row and 3 + 1 following", CurrentRow, Add(Literal(3), Literal(1))),
-      ("between current row and 2147483649 following", CurrentRow, Literal(2147483649L)),
-      ("between current row and unbounded following", CurrentRow, UnboundedFollowing),
-      ("between 2147483648 preceding and unbounded following",
-        -Literal(2147483648L), UnboundedFollowing),
-      ("between 10 preceding and unbounded following",
-        -Literal(10), UnboundedFollowing),
-      ("between 3 + 1 preceding and unbounded following",
-        -Add(Literal(3), Literal(1)), UnboundedFollowing),
-      ("between 0 preceding and unbounded following", -Literal(0), UnboundedFollowing),
-
-      // Between partial and full range
-      ("between 10 preceding and 5 following", -Literal(10), Literal(5)),
       ("between unbounded preceding and unbounded following",
-        UnboundedPreceding, UnboundedFollowing)
+        UnboundedPreceding, UnboundedFollowing),
+      ("between 10 preceding and current row", ValuePreceding(10), CurrentRow),
+      ("between current row and 5 following", CurrentRow, ValueFollowing(5)),
+      ("between 10 preceding and 5 following", ValuePreceding(10), ValueFollowing(5))
     )
     frameTypes.foreach {
       case (frameTypeSql, frameType) =>
@@ -353,9 +283,13 @@ class ExpressionParserSuite extends AnalysisTest {
         }
     }
 
+    // We cannot use non integer constants.
+    intercept("foo(*) over (partition by a order by b rows 10.0 preceding)",
+      "Frame bound value must be a constant integer.")
+
     // We cannot use an arbitrary expression.
     intercept("foo(*) over (partition by a order by b rows exp(b) preceding)",
-      "Frame bound value must be a literal.")
+      "Frame bound value must be a constant integer.")
   }
 
   test("row constructor") {
@@ -431,12 +365,6 @@ class ExpressionParserSuite extends AnalysisTest {
       Literal(Timestamp.valueOf("2016-03-11 20:54:00.000")))
     intercept("timestamP '2016-33-11 20:54:00.000'")
 
-    // Interval.
-    assertEqual("InterVal 'interval 3 month 1 hour'",
-      Literal(CalendarInterval.fromString("interval 3 month 1 hour")))
-    assertEqual("Interval 'interval 3 monthsss 1 hoursss'",
-      Literal(null, CalendarIntervalType))
-
     // Binary.
     assertEqual("X'A'", Literal(Array(0x0a).map(_.toByte)))
     assertEqual("x'A10C'", Literal(Array(0xa1, 0x0c).map(_.toByte)))
@@ -498,7 +426,7 @@ class ExpressionParserSuite extends AnalysisTest {
       Literal(BigDecimal("90912830918230182310293801923652346786").underlying()))
     assertEqual("123.0E-28BD", Literal(BigDecimal("123.0E-28").underlying()))
     assertEqual("123.08BD", Literal(BigDecimal("123.08").underlying()))
-    intercept("1.20E-38BD", "decimal can only support precision up to 38")
+    intercept("1.20E-38BD", "DecimalType can only support precision up to 38")
   }
 
   test("strings") {
@@ -585,60 +513,49 @@ class ExpressionParserSuite extends AnalysisTest {
     }
   }
 
-  val intervalUnits = Seq(
-    "year",
-    "month",
-    "week",
-    "day",
-    "hour",
-    "minute",
-    "second",
-    "millisecond",
-    "microsecond")
-
-  def intervalLiteral(u: String, s: String): Literal = {
-    Literal(CalendarInterval.fromSingleUnitString(u, s))
-  }
-
   test("intervals") {
-    def checkIntervals(intervalValue: String, expected: Literal): Unit = {
-      assertEqual(s"interval $intervalValue", expected)
-
-      // SPARK-23264 Support interval values without INTERVAL clauses if ANSI SQL enabled
-      withSQLConf(SQLConf.ANSI_SQL_PARSER.key -> "true") {
-        assertEqual(intervalValue, expected)
-      }
+    def intervalLiteral(u: String, s: String): Literal = {
+      Literal(CalendarInterval.fromSingleUnitString(u, s))
     }
 
     // Empty interval statement
     intercept("interval", "at least one time unit should be given for interval literal")
 
     // Single Intervals.
+    val units = Seq(
+      "year",
+      "month",
+      "week",
+      "day",
+      "hour",
+      "minute",
+      "second",
+      "millisecond",
+      "microsecond")
     val forms = Seq("", "s")
     val values = Seq("0", "10", "-7", "21")
-    intervalUnits.foreach { unit =>
+    units.foreach { unit =>
       forms.foreach { form =>
          values.foreach { value =>
            val expected = intervalLiteral(unit, value)
-           checkIntervals(s"$value $unit$form", expected)
-           checkIntervals(s"'$value' $unit$form", expected)
+           assertEqual(s"interval $value $unit$form", expected)
+           assertEqual(s"interval '$value' $unit$form", expected)
          }
       }
     }
 
     // Hive nanosecond notation.
-    checkIntervals("13.123456789 seconds", intervalLiteral("second", "13.123456789"))
-    checkIntervals("-13.123456789 second", intervalLiteral("second", "-13.123456789"))
+    assertEqual("interval 13.123456789 seconds", intervalLiteral("second", "13.123456789"))
+    assertEqual("interval -13.123456789 second", intervalLiteral("second", "-13.123456789"))
 
     // Non Existing unit
-    intercept("interval 10 nanoseconds",
-      "no viable alternative at input 'interval 10 nanoseconds'")
+    intercept("interval 10 nanoseconds", "No interval can be constructed")
 
     // Year-Month intervals.
     val yearMonthValues = Seq("123-10", "496-0", "-2-3", "-123-0")
     yearMonthValues.foreach { value =>
       val result = Literal(CalendarInterval.fromYearMonthString(value))
-      checkIntervals(s"'$value' year to month", result)
+      assertEqual(s"interval '$value' year to month", result)
     }
 
     // Day-Time intervals.
@@ -651,61 +568,20 @@ class ExpressionParserSuite extends AnalysisTest {
       "1 0:0:1")
     datTimeValues.foreach { value =>
       val result = Literal(CalendarInterval.fromDayTimeString(value))
-      checkIntervals(s"'$value' day to second", result)
-    }
-
-    // Hour-Time intervals.
-    val hourTimeValues = Seq(
-      "11:22:33.123456789",
-      "9:8:7.123456789",
-      "-19:18:17.123456789",
-      "0:0:0",
-      "0:0:1")
-    hourTimeValues.foreach { value =>
-      val result = Literal(CalendarInterval.fromDayTimeString(value))
-      checkIntervals(s"'$value' hour to second", result)
+      assertEqual(s"interval '$value' day to second", result)
     }
 
     // Unknown FROM TO intervals
-    intercept("interval 10 month to second",
-      "Intervals FROM month TO second are not supported.")
+    intercept("interval 10 month to second", "Intervals FROM month TO second are not supported.")
 
     // Composed intervals.
-    checkIntervals(
-      "3 months 22 seconds 1 millisecond",
+    assertEqual(
+      "interval 3 months 22 seconds 1 millisecond",
       Literal(new CalendarInterval(3, 22001000L)))
-    checkIntervals(
-      "3 years '-1-10' year to month 3 weeks '1 0:0:2' day to second",
+    assertEqual(
+      "interval 3 years '-1-10' year to month 3 weeks '1 0:0:2' day to second",
       Literal(new CalendarInterval(14,
         22 * CalendarInterval.MICROS_PER_DAY + 2 * CalendarInterval.MICROS_PER_SECOND)))
-  }
-
-  test("SPARK-23264 Interval Compatibility tests") {
-    def checkIntervals(intervalValue: String, expected: Literal): Unit = {
-      withSQLConf(SQLConf.ANSI_SQL_PARSER.key -> "true") {
-        assertEqual(intervalValue, expected)
-      }
-
-      // Compatibility tests: If ANSI SQL disabled, `intervalValue` should be parsed as an alias
-      withSQLConf(SQLConf.ANSI_SQL_PARSER.key -> "false") {
-        val aliases = defaultParser.parseExpression(intervalValue).collect {
-          case a @ Alias(_: Literal, name)
-            if intervalUnits.exists { unit => name.startsWith(unit) } => a
-        }
-        assert(aliases.size === 1)
-      }
-    }
-    val forms = Seq("", "s")
-    val values = Seq("5", "1", "-11", "8")
-    intervalUnits.foreach { unit =>
-      forms.foreach { form =>
-         values.foreach { value =>
-           val expected = intervalLiteral(unit, value)
-           checkIntervals(s"$value $unit$form", expected)
-           checkIntervals(s"'$value' $unit$form", expected)
-         }
-      }
-    }
   }
 
   test("composed expressions") {
@@ -741,58 +617,5 @@ class ExpressionParserSuite extends AnalysisTest {
     assertEqual("first(a)", First('a, Literal(false)).toAggregateExpression())
     assertEqual("last(a ignore nulls)", Last('a, Literal(true)).toAggregateExpression())
     assertEqual("last(a)", Last('a, Literal(false)).toAggregateExpression())
-  }
-
-  test("Support respect nulls keywords for first_value and last_value") {
-    assertEqual("first_value(a ignore nulls)", First('a, Literal(true)).toAggregateExpression())
-    assertEqual("first_value(a respect nulls)", First('a, Literal(false)).toAggregateExpression())
-    assertEqual("first_value(a)", First('a, Literal(false)).toAggregateExpression())
-    assertEqual("last_value(a ignore nulls)", Last('a, Literal(true)).toAggregateExpression())
-    assertEqual("last_value(a respect nulls)", Last('a, Literal(false)).toAggregateExpression())
-    assertEqual("last_value(a)", Last('a, Literal(false)).toAggregateExpression())
-  }
-
-  test("timestamp literals") {
-    DateTimeTestUtils.outstandingTimezones.foreach { timeZone =>
-      withSQLConf(SQLConf.SESSION_LOCAL_TIMEZONE.key -> timeZone.getID) {
-        def toMicros(time: LocalDateTime): Long = {
-          val seconds = time.atZone(timeZone.toZoneId).toInstant.getEpochSecond
-          TimeUnit.SECONDS.toMicros(seconds)
-        }
-        assertEval(
-          sqlCommand = "TIMESTAMP '2019-01-14 20:54:00.000'",
-          expect = toMicros(LocalDateTime.of(2019, 1, 14, 20, 54)))
-        assertEval(
-          sqlCommand = "Timestamp '2000-01-01T00:55:00'",
-          expect = toMicros(LocalDateTime.of(2000, 1, 1, 0, 55)))
-        // Parsing of the string does not depend on the SQL config because the string contains
-        // time zone offset already.
-        assertEval(
-          sqlCommand = "TIMESTAMP '2019-01-16 20:50:00.567000+01:00'",
-          expect = 1547668200567000L)
-      }
-    }
-  }
-
-  test("date literals") {
-    DateTimeTestUtils.outstandingTimezonesIds.foreach { timeZone =>
-      withSQLConf(SQLConf.SESSION_LOCAL_TIMEZONE.key -> timeZone) {
-        assertEval("DATE '2019-01-14'", 17910)
-        assertEval("DATE '2019-01'", 17897)
-        assertEval("DATE '2019'", 17897)
-      }
-    }
-  }
-
-  test("current date/timestamp braceless expressions") {
-    withSQLConf(SQLConf.ANSI_SQL_PARSER.key -> "true") {
-      assertEqual("current_date", CurrentDate())
-      assertEqual("current_timestamp", CurrentTimestamp())
-    }
-
-    withSQLConf(SQLConf.ANSI_SQL_PARSER.key -> "false") {
-      assertEqual("current_date", UnresolvedAttribute.quoted("current_date"))
-      assertEqual("current_timestamp", UnresolvedAttribute.quoted("current_timestamp"))
-    }
   }
 }

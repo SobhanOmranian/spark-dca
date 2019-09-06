@@ -33,7 +33,7 @@ class RemoveRedundantAliasAndProjectSuite extends PlanTest with PredicateHelper 
       FixedPoint(50),
       PushProjectionThroughUnion,
       RemoveRedundantAliases,
-      RemoveNoopOperators) :: Nil
+      RemoveRedundantProject) :: Nil
   }
 
   test("all expressions in project list are aliased child output") {

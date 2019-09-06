@@ -42,13 +42,15 @@ object SimpleFPGrowth {
     val model = fpg.run(transactions)
 
     model.freqItemsets.collect().foreach { itemset =>
-      println(s"${itemset.items.mkString("[", ",", "]")},${itemset.freq}")
+      println(itemset.items.mkString("[", ",", "]") + ", " + itemset.freq)
     }
 
     val minConfidence = 0.8
     model.generateAssociationRules(minConfidence).collect().foreach { rule =>
-      println(s"${rule.antecedent.mkString("[", ",", "]")}=> " +
-        s"${rule.consequent .mkString("[", ",", "]")},${rule.confidence}")
+      println(
+        rule.antecedent.mkString("[", ",", "]")
+          + " => " + rule.consequent .mkString("[", ",", "]")
+          + ", " + rule.confidence)
     }
     // $example off$
 

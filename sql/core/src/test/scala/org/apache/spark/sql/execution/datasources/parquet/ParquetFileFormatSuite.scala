@@ -22,14 +22,14 @@ import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.SparkException
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 
-class ParquetFileFormatSuite extends QueryTest with ParquetTest with SharedSparkSession {
+class ParquetFileFormatSuite extends QueryTest with ParquetTest with SharedSQLContext {
 
   test("read parquet footers in parallel") {
     def testReadFooters(ignoreCorruptFiles: Boolean): Unit = {
       withTempDir { dir =>
-        val fs = FileSystem.get(spark.sessionState.newHadoopConf())
+        val fs = FileSystem.get(sparkContext.hadoopConfiguration)
         val basePath = dir.getCanonicalPath
 
         val path1 = new Path(basePath, "first")
@@ -44,16 +44,16 @@ class ParquetFileFormatSuite extends QueryTest with ParquetTest with SharedSpark
           Seq(fs.listStatus(path1), fs.listStatus(path2), fs.listStatus(path3)).flatten
 
         val footers = ParquetFileFormat.readParquetFootersInParallel(
-          spark.sessionState.newHadoopConf(), fileStatuses, ignoreCorruptFiles)
+          sparkContext.hadoopConfiguration, fileStatuses, ignoreCorruptFiles)
 
         assert(footers.size == 2)
       }
     }
 
     testReadFooters(true)
-    val exception = intercept[SparkException] {
+    val exception = intercept[java.io.IOException] {
       testReadFooters(false)
-    }.getCause
+    }
     assert(exception.getMessage().contains("Could not read footer for file"))
   }
 }

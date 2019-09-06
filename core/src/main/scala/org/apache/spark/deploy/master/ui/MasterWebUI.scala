@@ -17,10 +17,12 @@
 
 package org.apache.spark.deploy.master.ui
 
-import org.apache.spark.deploy.DeployMessages.{MasterStateResponse, RequestMasterState}
+import scala.collection.mutable.HashMap
+
+import org.eclipse.jetty.servlet.ServletContextHandler
+
 import org.apache.spark.deploy.master.Master
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.UI.UI_KILL_ENABLED
 import org.apache.spark.ui.{SparkUI, WebUI}
 import org.apache.spark.ui.JettyUtils._
 
@@ -35,7 +37,8 @@ class MasterWebUI(
     requestedPort, master.conf, name = "MasterUI") with Logging {
 
   val masterEndpointRef = master.self
-  val killEnabled = master.conf.get(UI_KILL_ENABLED)
+  val killEnabled = master.conf.getBoolean("spark.ui.killEnabled", true)
+  private val proxyHandlers = new HashMap[String, ServletContextHandler]
 
   initialize()
 
@@ -44,26 +47,23 @@ class MasterWebUI(
     val masterPage = new MasterPage(this)
     attachPage(new ApplicationPage(this))
     attachPage(masterPage)
-    addStaticHandler(MasterWebUI.STATIC_RESOURCE_DIR)
+    attachHandler(createStaticHandler(MasterWebUI.STATIC_RESOURCE_DIR, "/static"))
     attachHandler(createRedirectHandler(
       "/app/kill", "/", masterPage.handleAppKillRequest, httpMethods = Set("POST")))
     attachHandler(createRedirectHandler(
       "/driver/kill", "/", masterPage.handleDriverKillRequest, httpMethods = Set("POST")))
   }
 
-  def addProxy(): Unit = {
-    val handler = createProxyHandler(idToUiAddress)
+  def addProxyTargets(id: String, target: String): Unit = {
+    var endTarget = target.stripSuffix("/")
+    val handler = createProxyHandler("/proxy/" + id, endTarget)
     attachHandler(handler)
+    proxyHandlers(id) = handler
   }
 
-  def idToUiAddress(id: String): Option[String] = {
-    val state = masterEndpointRef.askSync[MasterStateResponse](RequestMasterState)
-    val maybeWorkerUiAddress = state.workers.find(_.id == id).map(_.webUiAddress)
-    val maybeAppUiAddress = state.activeApps.find(_.id == id).map(_.desc.appUiUrl)
-
-    maybeWorkerUiAddress.orElse(maybeAppUiAddress)
+  def removeProxyTargets(id: String): Unit = {
+    proxyHandlers.remove(id).foreach(detachHandler)
   }
-
 }
 
 private[master] object MasterWebUI {

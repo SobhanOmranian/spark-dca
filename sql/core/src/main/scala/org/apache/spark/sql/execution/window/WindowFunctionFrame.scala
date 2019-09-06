@@ -21,7 +21,6 @@ import java.util
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.expressions.BindReferences.bindReferences
 import org.apache.spark.sql.catalyst.expressions.aggregate.NoOp
 import org.apache.spark.sql.execution.ExternalAppendOnlyUnsafeRowArray
 
@@ -31,7 +30,7 @@ import org.apache.spark.sql.execution.ExternalAppendOnlyUnsafeRowArray
  * Before use a frame must be prepared by passing it all the rows in the current partition. After
  * preparation the update method can be called to fill the output rows.
  */
-abstract class WindowFunctionFrame {
+private[window] abstract class WindowFunctionFrame {
   /**
    * Prepare the frame for calculating the results for a partition.
    *
@@ -43,20 +42,6 @@ abstract class WindowFunctionFrame {
    * Write the current results to the target row.
    */
   def write(index: Int, current: InternalRow): Unit
-
-  /**
-   * The current lower window bound in the row array (inclusive).
-   *
-   * This should be called after the current row is updated via [[write]]
-   */
-  def currentLowerBound(): Int
-
-  /**
-   * The current row index of the upper window bound in the row array (exclusive)
-   *
-   * This should be called after the current row is updated via [[write]]
-   */
-  def currentUpperBound(): Int
 }
 
 object WindowFunctionFrame {
@@ -77,7 +62,7 @@ object WindowFunctionFrame {
  * @param newMutableProjection function used to create the projection.
  * @param offset by which rows get moved within a partition.
  */
-final class OffsetWindowFunctionFrame(
+private[window] final class OffsetWindowFunctionFrame(
     target: InternalRow,
     ordinal: Int,
     expressions: Array[OffsetWindowFunction],
@@ -104,8 +89,9 @@ final class OffsetWindowFunctionFrame(
   private[this] val projection = {
     // Collect the expressions and bind them.
     val inputAttrs = inputSchema.map(_.withNullability(true))
-    val boundExpressions = Seq.fill(ordinal)(NoOp) ++ bindReferences(
-      expressions.toSeq.map(_.input), inputAttrs)
+    val boundExpressions = Seq.fill(ordinal)(NoOp) ++ expressions.toSeq.map { e =>
+      BindReferences.bindReference(e.input, inputAttrs)
+    }
 
     // Create the projection.
     newMutableProjection(boundExpressions, Nil).target(target)
@@ -114,7 +100,7 @@ final class OffsetWindowFunctionFrame(
   /** Create the projection used when the offset row DOES NOT exists. */
   private[this] val fillDefaultValue = {
     // Collect the expressions and bind them.
-    val inputAttrs: AttributeSeq = inputSchema.map(_.withNullability(true))
+    val inputAttrs = inputSchema.map(_.withNullability(true))
     val boundExpressions = Seq.fill(ordinal)(NoOp) ++ expressions.toSeq.map { e =>
       if (e.default == null || e.default.foldable && e.default.eval() == null) {
         // The default value is null.
@@ -151,10 +137,6 @@ final class OffsetWindowFunctionFrame(
     }
     inputIndex += 1
   }
-
-  override def currentLowerBound(): Int = throw new UnsupportedOperationException()
-
-  override def currentUpperBound(): Int = throw new UnsupportedOperationException()
 }
 
 /**
@@ -166,7 +148,7 @@ final class OffsetWindowFunctionFrame(
  * @param lbound comparator used to identify the lower bound of an output row.
  * @param ubound comparator used to identify the upper bound of an output row.
  */
-final class SlidingWindowFunctionFrame(
+private[window] final class SlidingWindowFunctionFrame(
     target: InternalRow,
     processor: AggregateProcessor,
     lbound: BoundOrdering,
@@ -188,24 +170,24 @@ final class SlidingWindowFunctionFrame(
   private[this] val buffer = new util.ArrayDeque[InternalRow]()
 
   /**
-   * Index of the first input row with a value equal to or greater than the lower bound of the
-   * current output row.
-   */
-  private[this] var lowerBound = 0
-
-  /**
    * Index of the first input row with a value greater than the upper bound of the current
    * output row.
    */
-  private[this] var upperBound = 0
+  private[this] var inputHighIndex = 0
+
+  /**
+   * Index of the first input row with a value equal to or greater than the lower bound of the
+   * current output row.
+   */
+  private[this] var inputLowIndex = 0
 
   /** Prepare the frame for calculating a new partition. Reset all variables. */
   override def prepare(rows: ExternalAppendOnlyUnsafeRowArray): Unit = {
     input = rows
     inputIterator = input.generateIterator()
     nextRow = WindowFunctionFrame.getNextOrNull(inputIterator)
-    lowerBound = 0
-    upperBound = 0
+    inputHighIndex = 0
+    inputLowIndex = 0
     buffer.clear()
   }
 
@@ -215,27 +197,27 @@ final class SlidingWindowFunctionFrame(
 
     // Drop all rows from the buffer for which the input row value is smaller than
     // the output row lower bound.
-    while (!buffer.isEmpty && lbound.compare(buffer.peek(), lowerBound, current, index) < 0) {
+    while (!buffer.isEmpty && lbound.compare(buffer.peek(), inputLowIndex, current, index) < 0) {
       buffer.remove()
-      lowerBound += 1
+      inputLowIndex += 1
       bufferUpdated = true
     }
 
     // Add all rows to the buffer for which the input row value is equal to or less than
     // the output row upper bound.
-    while (nextRow != null && ubound.compare(nextRow, upperBound, current, index) <= 0) {
-      if (lbound.compare(nextRow, lowerBound, current, index) < 0) {
-        lowerBound += 1
+    while (nextRow != null && ubound.compare(nextRow, inputHighIndex, current, index) <= 0) {
+      if (lbound.compare(nextRow, inputLowIndex, current, index) < 0) {
+        inputLowIndex += 1
       } else {
         buffer.add(nextRow.copy())
         bufferUpdated = true
       }
       nextRow = WindowFunctionFrame.getNextOrNull(inputIterator)
-      upperBound += 1
+      inputHighIndex += 1
     }
 
     // Only recalculate and update when the buffer changes.
-    if (processor != null && bufferUpdated) {
+    if (bufferUpdated) {
       processor.initialize(input.length)
       val iter = buffer.iterator()
       while (iter.hasNext) {
@@ -244,10 +226,6 @@ final class SlidingWindowFunctionFrame(
       processor.evaluate(target)
     }
   }
-
-  override def currentLowerBound(): Int = lowerBound
-
-  override def currentUpperBound(): Int = upperBound
 }
 
 /**
@@ -261,39 +239,27 @@ final class SlidingWindowFunctionFrame(
  * @param target to write results to.
  * @param processor to calculate the row values with.
  */
-final class UnboundedWindowFunctionFrame(
+private[window] final class UnboundedWindowFunctionFrame(
     target: InternalRow,
     processor: AggregateProcessor)
   extends WindowFunctionFrame {
 
-  val lowerBound: Int = 0
-  var upperBound: Int = 0
-
   /** Prepare the frame for calculating a new partition. Process all rows eagerly. */
   override def prepare(rows: ExternalAppendOnlyUnsafeRowArray): Unit = {
-    if (processor != null) {
-      processor.initialize(rows.length)
-      val iterator = rows.generateIterator()
-      while (iterator.hasNext) {
-        processor.update(iterator.next())
-      }
-    }
+    processor.initialize(rows.length)
 
-    upperBound = rows.length
+    val iterator = rows.generateIterator()
+    while (iterator.hasNext) {
+      processor.update(iterator.next())
+    }
   }
 
   /** Write the frame columns for the current row to the given target row. */
   override def write(index: Int, current: InternalRow): Unit = {
     // Unfortunately we cannot assume that evaluation is deterministic. So we need to re-evaluate
     // for each row.
-    if (processor != null) {
-      processor.evaluate(target)
-    }
+    processor.evaluate(target)
   }
-
-  override def currentLowerBound(): Int = lowerBound
-
-  override def currentUpperBound(): Int = upperBound
 }
 
 /**
@@ -310,7 +276,7 @@ final class UnboundedWindowFunctionFrame(
  * @param processor to calculate the row values with.
  * @param ubound comparator used to identify the upper bound of an output row.
  */
-final class UnboundedPrecedingWindowFunctionFrame(
+private[window] final class UnboundedPrecedingWindowFunctionFrame(
     target: InternalRow,
     processor: AggregateProcessor,
     ubound: BoundOrdering)
@@ -342,9 +308,7 @@ final class UnboundedPrecedingWindowFunctionFrame(
       nextRow = inputIterator.next()
     }
 
-    if (processor != null) {
-      processor.initialize(input.length)
-    }
+    processor.initialize(input.length)
   }
 
   /** Write the frame columns for the current row to the given target row. */
@@ -354,23 +318,17 @@ final class UnboundedPrecedingWindowFunctionFrame(
     // Add all rows to the aggregates for which the input row value is equal to or less than
     // the output row upper bound.
     while (nextRow != null && ubound.compare(nextRow, inputIndex, current, index) <= 0) {
-      if (processor != null) {
-        processor.update(nextRow)
-      }
+      processor.update(nextRow)
       nextRow = WindowFunctionFrame.getNextOrNull(inputIterator)
       inputIndex += 1
       bufferUpdated = true
     }
 
     // Only recalculate and update when the buffer changes.
-    if (processor != null && bufferUpdated) {
+    if (bufferUpdated) {
       processor.evaluate(target)
     }
   }
-
-  override def currentLowerBound(): Int = 0
-
-  override def currentUpperBound(): Int = inputIndex
 }
 
 /**
@@ -389,7 +347,7 @@ final class UnboundedPrecedingWindowFunctionFrame(
  * @param processor to calculate the row values with.
  * @param lbound comparator used to identify the lower bound of an output row.
  */
-final class UnboundedFollowingWindowFunctionFrame(
+private[window] final class UnboundedFollowingWindowFunctionFrame(
     target: InternalRow,
     processor: AggregateProcessor,
     lbound: BoundOrdering)
@@ -426,7 +384,7 @@ final class UnboundedFollowingWindowFunctionFrame(
     }
 
     // Only recalculate and update when the buffer changes.
-    if (processor != null && bufferUpdated) {
+    if (bufferUpdated) {
       processor.initialize(input.length)
       if (nextRow != null) {
         processor.update(nextRow)
@@ -437,8 +395,4 @@ final class UnboundedFollowingWindowFunctionFrame(
       processor.evaluate(target)
     }
   }
-
-  override def currentLowerBound(): Int = inputIndex
-
-  override def currentUpperBound(): Int = input.length
 }

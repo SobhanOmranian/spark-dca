@@ -25,7 +25,6 @@ import org.apache.commons.io.FileUtils
 import org.apache.commons.io.filefilter.TrueFileFilter
 import org.scalatest.BeforeAndAfterAll
 
-import org.apache.spark.internal.config
 import org.apache.spark.rdd.ShuffledRDD
 import org.apache.spark.serializer.{JavaSerializer, KryoSerializer}
 import org.apache.spark.shuffle.sort.SortShuffleManager
@@ -39,11 +38,7 @@ class SortShuffleSuite extends ShuffleSuite with BeforeAndAfterAll {
 
   override def beforeAll() {
     super.beforeAll()
-    // Once 'spark.local.dir' is set, it is cached. Unless this is manually cleared
-    // before/after a test, it could return the same directory even if this property
-    // is configured.
-    Utils.clearLocalRootDirs()
-    conf.set(config.SHUFFLE_MANAGER, "sort")
+    conf.set("spark.shuffle.manager", "sort")
   }
 
   override def beforeEach(): Unit = {
@@ -55,7 +50,6 @@ class SortShuffleSuite extends ShuffleSuite with BeforeAndAfterAll {
   override def afterEach(): Unit = {
     try {
       Utils.deleteRecursively(tempDir)
-      Utils.clearLocalRootDirs()
     } finally {
       super.afterEach()
     }

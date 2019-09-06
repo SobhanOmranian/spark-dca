@@ -19,16 +19,19 @@ package org.apache.spark.ml.regression
 
 import scala.util.Random
 
+import org.apache.spark.SparkFunSuite
 import org.apache.spark.ml.linalg.{Vector, Vectors}
 import org.apache.spark.ml.param.ParamsSuite
-import org.apache.spark.ml.util.{DefaultReadWriteTest, MLTest, MLTestingUtils}
+import org.apache.spark.ml.util.{DefaultReadWriteTest, MLTestingUtils}
 import org.apache.spark.ml.util.TestingUtils._
 import org.apache.spark.mllib.random.{ExponentialGenerator, WeibullGenerator}
+import org.apache.spark.mllib.util.MLlibTestSparkContext
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.functions.{col, lit}
 import org.apache.spark.sql.types._
 
-class AFTSurvivalRegressionSuite extends MLTest with DefaultReadWriteTest {
+class AFTSurvivalRegressionSuite
+  extends SparkFunSuite with MLlibTestSparkContext with DefaultReadWriteTest {
 
   import testImplicits._
 
@@ -188,8 +191,8 @@ class AFTSurvivalRegressionSuite extends MLTest with DefaultReadWriteTest {
     assert(model.predict(features) ~== responsePredictR relTol 1E-3)
     assert(model.predictQuantiles(features) ~== quantilePredictR relTol 1E-3)
 
-    testTransformer[(Vector, Double, Double)](datasetUnivariate, model,
-      "features", "prediction", "quantiles") {
+    model.transform(datasetUnivariate).select("features", "prediction", "quantiles")
+      .collect().foreach {
         case Row(features: Vector, prediction: Double, quantiles: Vector) =>
           assert(prediction ~== model.predict(features) relTol 1E-5)
           assert(quantiles ~== model.predictQuantiles(features) relTol 1E-5)
@@ -258,8 +261,8 @@ class AFTSurvivalRegressionSuite extends MLTest with DefaultReadWriteTest {
     assert(model.predict(features) ~== responsePredictR relTol 1E-3)
     assert(model.predictQuantiles(features) ~== quantilePredictR relTol 1E-3)
 
-    testTransformer[(Vector, Double, Double)](datasetMultivariate, model,
-      "features", "prediction", "quantiles") {
+    model.transform(datasetMultivariate).select("features", "prediction", "quantiles")
+      .collect().foreach {
         case Row(features: Vector, prediction: Double, quantiles: Vector) =>
           assert(prediction ~== model.predict(features) relTol 1E-5)
           assert(quantiles ~== model.predictQuantiles(features) relTol 1E-5)
@@ -328,8 +331,8 @@ class AFTSurvivalRegressionSuite extends MLTest with DefaultReadWriteTest {
     assert(model.predict(features) ~== responsePredictR relTol 1E-3)
     assert(model.predictQuantiles(features) ~== quantilePredictR relTol 1E-3)
 
-    testTransformer[(Vector, Double, Double)](datasetMultivariate, model,
-      "features", "prediction", "quantiles") {
+    model.transform(datasetMultivariate).select("features", "prediction", "quantiles")
+      .collect().foreach {
         case Row(features: Vector, prediction: Double, quantiles: Vector) =>
           assert(prediction ~== model.predict(features) relTol 1E-5)
           assert(quantiles ~== model.predictQuantiles(features) relTol 1E-5)
@@ -385,7 +388,7 @@ class AFTSurvivalRegressionSuite extends MLTest with DefaultReadWriteTest {
       aft.fit(dfWithStringCensors)
     }
     assert(thrown.getMessage.contains(
-      "Column censor must be of type numeric but was actually of type string"))
+      "Column censor must be of type NumericType but was actually of type StringType"))
   }
 
   test("numerical stability of standardization") {

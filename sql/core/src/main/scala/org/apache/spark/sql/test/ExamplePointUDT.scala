@@ -34,8 +34,6 @@ private[sql] class ExamplePoint(val x: Double, val y: Double) extends Serializab
     case that: ExamplePoint => this.x == that.x && this.y == that.y
     case _ => false
   }
-
-  override def toString(): String = s"($x, $y)"
 }
 
 /**
@@ -45,7 +43,7 @@ private[sql] class ExamplePointUDT extends UserDefinedType[ExamplePoint] {
 
   override def sqlType: DataType = ArrayType(DoubleType, false)
 
-  override def pyUDT: String = "pyspark.testing.sqlutils.ExamplePointUDT"
+  override def pyUDT: String = "pyspark.sql.tests.ExamplePointUDT"
 
   override def serialize(p: ExamplePoint): GenericArrayData = {
     val output = new Array[Any](2)

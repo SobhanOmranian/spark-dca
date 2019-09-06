@@ -24,7 +24,6 @@ import org.json4s.jackson.Serialization
 
 /**
  * Offset for the [[FileStreamSource]].
- *
  * @param logOffset  Position in the [[FileStreamSourceLog]]
  */
 case class FileStreamSourceOffset(logOffset: Long) extends Offset {

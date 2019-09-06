@@ -25,7 +25,6 @@ import scala.collection.JavaConverters._
 
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config._
 import org.apache.spark.rdd.{RDD, ReliableRDDCheckpointData}
 import org.apache.spark.util.{AccumulatorContext, AccumulatorV2, ThreadUtils, Utils}
 
@@ -84,7 +83,8 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
    * on the driver, this may happen very occasionally or not at all. Not cleaning at all may
    * lead to executors running out of disk space after a while.
    */
-  private val periodicGCInterval = sc.conf.get(CLEANER_PERIODIC_GC_INTERVAL)
+  private val periodicGCInterval =
+    sc.conf.getTimeAsSeconds("spark.cleaner.periodicGC.interval", "30min")
 
   /**
    * Whether the cleaning thread will block on cleanup tasks (other than shuffle, which
@@ -96,7 +96,8 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
    * for instance, when the driver performs a GC and cleans up all broadcast blocks that are no
    * longer in scope.
    */
-  private val blockOnCleanupTasks = sc.conf.get(CLEANER_REFERENCE_TRACKING_BLOCKING)
+  private val blockOnCleanupTasks = sc.conf.getBoolean(
+    "spark.cleaner.referenceTracking.blocking", true)
 
   /**
    * Whether the cleaning thread will block on shuffle cleanup tasks.
@@ -108,8 +109,8 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
    * until the real RPC issue (referred to in the comment above `blockOnCleanupTasks`) is
    * resolved.
    */
-  private val blockOnShuffleCleanupTasks =
-    sc.conf.get(CLEANER_REFERENCE_TRACKING_BLOCKING_SHUFFLE)
+  private val blockOnShuffleCleanupTasks = sc.conf.getBoolean(
+    "spark.cleaner.referenceTracking.blocking.shuffle", false)
 
   @volatile private var stopped = false
 
@@ -123,8 +124,9 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
     cleaningThread.setDaemon(true)
     cleaningThread.setName("Spark Context Cleaner")
     cleaningThread.start()
-    periodicGCService.scheduleAtFixedRate(() => System.gc(),
-      periodicGCInterval, periodicGCInterval, TimeUnit.SECONDS)
+    periodicGCService.scheduleAtFixedRate(new Runnable {
+      override def run(): Unit = System.gc()
+    }, periodicGCInterval, periodicGCInterval, TimeUnit.SECONDS)
   }
 
   /**
@@ -210,7 +212,7 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
       logDebug("Cleaning RDD " + rddId)
       sc.unpersistRDD(rddId, blocking)
       listeners.asScala.foreach(_.rddCleaned(rddId))
-      logDebug("Cleaned RDD " + rddId)
+      logInfo("Cleaned RDD " + rddId)
     } catch {
       case e: Exception => logError("Error cleaning RDD " + rddId, e)
     }
@@ -223,7 +225,7 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
       mapOutputTrackerMaster.unregisterShuffle(shuffleId)
       blockManagerMaster.removeShuffle(shuffleId, blocking)
       listeners.asScala.foreach(_.shuffleCleaned(shuffleId))
-      logDebug("Cleaned shuffle " + shuffleId)
+      logInfo("Cleaned shuffle " + shuffleId)
     } catch {
       case e: Exception => logError("Error cleaning shuffle " + shuffleId, e)
     }
@@ -247,7 +249,7 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
       logDebug("Cleaning accumulator " + accId)
       AccumulatorContext.remove(accId)
       listeners.asScala.foreach(_.accumCleaned(accId))
-      logDebug("Cleaned accumulator " + accId)
+      logInfo("Cleaned accumulator " + accId)
     } catch {
       case e: Exception => logError("Error cleaning accumulator " + accId, e)
     }
@@ -262,7 +264,7 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
       logDebug("Cleaning rdd checkpoint data " + rddId)
       ReliableRDDCheckpointData.cleanCheckpoint(sc, rddId)
       listeners.asScala.foreach(_.checkpointCleaned(rddId))
-      logDebug("Cleaned rdd checkpoint data " + rddId)
+      logInfo("Cleaned rdd checkpoint data " + rddId)
     }
     catch {
       case e: Exception => logError("Error cleaning rdd checkpoint data " + rddId, e)

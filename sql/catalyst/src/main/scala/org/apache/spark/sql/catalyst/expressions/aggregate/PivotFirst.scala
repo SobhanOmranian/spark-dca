@@ -17,11 +17,11 @@
 
 package org.apache.spark.sql.catalyst.expressions.aggregate
 
-import scala.collection.immutable.{HashMap, TreeMap}
+import scala.collection.immutable.HashMap
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.util.{GenericArrayData, TypeUtils}
+import org.apache.spark.sql.catalyst.util.GenericArrayData
 import org.apache.spark.sql.types._
 
 object PivotFirst {
@@ -83,12 +83,7 @@ case class PivotFirst(
 
   override val dataType: DataType = ArrayType(valueDataType)
 
-  val pivotIndex = if (pivotColumn.dataType.isInstanceOf[AtomicType]) {
-    HashMap(pivotColumnValues.zipWithIndex: _*)
-  } else {
-    TreeMap(pivotColumnValues.zipWithIndex: _*)(
-      TypeUtils.getInterpretedOrdering(pivotColumn.dataType))
-  }
+  val pivotIndex = HashMap(pivotColumnValues.zipWithIndex: _*)
 
   val indexSize = pivotIndex.size
 

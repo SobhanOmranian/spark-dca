@@ -33,13 +33,14 @@ case class InsertIntoDataSourceCommand(
     overwrite: Boolean)
   extends RunnableCommand {
 
-  override def innerChildren: Seq[QueryPlan[_]] = Seq(query)
+  override protected def innerChildren: Seq[QueryPlan[_]] = Seq(query)
 
   override def run(sparkSession: SparkSession): Seq[Row] = {
     val relation = logicalRelation.relation.asInstanceOf[InsertableRelation]
     val data = Dataset.ofRows(sparkSession, query)
-    // Data has been casted to the target relation's schema by the PreprocessTableInsertion rule.
-    relation.insert(data, overwrite)
+    // Apply the schema of the existing table to the new data.
+    val df = sparkSession.internalCreateDataFrame(data.queryExecution.toRdd, logicalRelation.schema)
+    relation.insert(df, overwrite)
 
     // Re-cache all cached plans(including this relation itself, if it's cached) that refer to this
     // data source relation.

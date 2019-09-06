@@ -20,7 +20,6 @@ package org.apache.spark.streaming.util
 import java.nio.ByteBuffer
 import java.util.{Iterator => JIterator}
 import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
@@ -61,7 +60,7 @@ private[util] class BatchedWriteAheadLog(val wrappedLog: WriteAheadLog, conf: Sp
   private val walWriteQueue = new LinkedBlockingQueue[Record]()
 
   // Whether the writer thread is active
-  private val active: AtomicBoolean = new AtomicBoolean(true)
+  @volatile private var active: Boolean = true
   private val buffer = new ArrayBuffer[Record]()
 
   private val batchedWriterThread = startBatchedWriterThread()
@@ -73,7 +72,7 @@ private[util] class BatchedWriteAheadLog(val wrappedLog: WriteAheadLog, conf: Sp
   override def write(byteBuffer: ByteBuffer, time: Long): WriteAheadLogRecordHandle = {
     val promise = Promise[WriteAheadLogRecordHandle]()
     val putSuccessfully = synchronized {
-      if (active.get()) {
+      if (active) {
         walWriteQueue.offer(Record(byteBuffer, time, promise))
         true
       } else {
@@ -122,7 +121,9 @@ private[util] class BatchedWriteAheadLog(val wrappedLog: WriteAheadLog, conf: Sp
    */
   override def close(): Unit = {
     logInfo(s"BatchedWriteAheadLog shutting down at time: ${System.currentTimeMillis()}.")
-    if (!active.getAndSet(false)) return
+    synchronized {
+      active = false
+    }
     batchedWriterThread.interrupt()
     batchedWriterThread.join()
     while (!walWriteQueue.isEmpty) {
@@ -135,16 +136,18 @@ private[util] class BatchedWriteAheadLog(val wrappedLog: WriteAheadLog, conf: Sp
 
   /** Start the actual log writer on a separate thread. */
   private def startBatchedWriterThread(): Thread = {
-    val thread = new Thread(() => {
-      while (active.get()) {
-        try {
-          flushRecords()
-        } catch {
-          case NonFatal(e) =>
-            logWarning("Encountered exception in Batched Writer Thread.", e)
+    val thread = new Thread(new Runnable {
+      override def run(): Unit = {
+        while (active) {
+          try {
+            flushRecords()
+          } catch {
+            case NonFatal(e) =>
+              logWarning("Encountered exception in Batched Writer Thread.", e)
+          }
         }
+        logInfo("BatchedWriteAheadLog Writer thread exiting.")
       }
-      logInfo("BatchedWriteAheadLog Writer thread exiting.")
     }, "BatchedWriteAheadLog Writer")
     thread.setDaemon(true)
     thread.start()
@@ -163,7 +166,7 @@ private[util] class BatchedWriteAheadLog(val wrappedLog: WriteAheadLog, conf: Sp
     }
     try {
       var segment: WriteAheadLogRecordHandle = null
-      if (buffer.nonEmpty) {
+      if (buffer.length > 0) {
         logDebug(s"Batched ${buffer.length} records for Write Ahead Log write")
         // threads may not be able to add items in order by time
         val sortedByTime = buffer.sortBy(_.time)

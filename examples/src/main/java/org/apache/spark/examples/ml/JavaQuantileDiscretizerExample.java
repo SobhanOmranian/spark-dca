@@ -66,7 +66,7 @@ public class JavaQuantileDiscretizerExample {
       .setNumBuckets(3);
 
     Dataset<Row> result = discretizer.fit(df).transform(df);
-    result.show(false);
+    result.show();
     // $example off$
     spark.stop();
   }

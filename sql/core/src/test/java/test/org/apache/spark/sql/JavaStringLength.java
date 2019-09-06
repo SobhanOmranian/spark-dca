@@ -25,6 +25,6 @@ import org.apache.spark.sql.api.java.UDF1;
 public class JavaStringLength implements UDF1<String, Integer> {
   @Override
   public Integer call(String str) throws Exception {
-    return Integer.valueOf(str.length());
+    return new Integer(str.length());
   }
 }

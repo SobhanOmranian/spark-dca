@@ -27,7 +27,7 @@ rrdd <- parallelize(sc, nums, 2L)
 
 test_that("using broadcast variable", {
   randomMat <- matrix(nrow = 10, ncol = 10, data = rnorm(100))
-  randomMatBr <- broadcastRDD(sc, randomMat)
+  randomMatBr <- broadcast(sc, randomMat)
 
   useBroadcast <- function(x) {
     sum(SparkR:::value(randomMatBr) * x)

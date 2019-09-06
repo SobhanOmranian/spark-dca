@@ -18,7 +18,8 @@
 package org.apache.spark.sql.execution.streaming
 
 import java.sql.Date
-import java.util.concurrent.TimeUnit
+
+import org.apache.commons.lang3.StringUtils
 
 import org.apache.spark.sql.catalyst.plans.logical.{EventTimeTimeout, ProcessingTimeTimeout}
 import org.apache.spark.sql.execution.streaming.GroupStateImpl._
@@ -42,8 +43,7 @@ private[sql] class GroupStateImpl[S] private(
     batchProcessingTimeMs: Long,
     eventTimeWatermarkMs: Long,
     timeoutConf: GroupStateTimeout,
-    override val hasTimedOut: Boolean,
-    watermarkPresent: Boolean) extends GroupState[S] {
+    override val hasTimedOut: Boolean) extends GroupState[S] {
 
   private var value: S = optionalValue.getOrElse(null.asInstanceOf[S])
   private var defined: Boolean = optionalValue.isDefined
@@ -90,7 +90,7 @@ private[sql] class GroupStateImpl[S] private(
     if (timeoutConf != ProcessingTimeTimeout) {
       throw new UnsupportedOperationException(
         "Cannot set timeout duration without enabling processing time timeout in " +
-          "[map|flatMap]GroupsWithState")
+          "map/flatMapGroupsWithState")
     }
     if (durationMs <= 0) {
       throw new IllegalArgumentException("Timeout duration must be positive")
@@ -102,6 +102,10 @@ private[sql] class GroupStateImpl[S] private(
     setTimeoutDuration(parseDuration(duration))
   }
 
+  @throws[IllegalArgumentException]("if 'timestampMs' is not positive")
+  @throws[IllegalStateException]("when state is either not initialized, or already removed")
+  @throws[UnsupportedOperationException](
+    "if 'timeout' has not been enabled in [map|flatMap]GroupsWithState in a streaming query")
   override def setTimeoutTimestamp(timestampMs: Long): Unit = {
     checkTimeoutTimestampAllowed()
     if (timestampMs <= 0) {
@@ -115,32 +119,30 @@ private[sql] class GroupStateImpl[S] private(
     timeoutTimestamp = timestampMs
   }
 
+  @throws[IllegalArgumentException]("if 'additionalDuration' is invalid")
+  @throws[IllegalStateException]("when state is either not initialized, or already removed")
+  @throws[UnsupportedOperationException](
+    "if 'timeout' has not been enabled in [map|flatMap]GroupsWithState in a streaming query")
   override def setTimeoutTimestamp(timestampMs: Long, additionalDuration: String): Unit = {
     checkTimeoutTimestampAllowed()
     setTimeoutTimestamp(parseDuration(additionalDuration) + timestampMs)
   }
 
+  @throws[IllegalStateException]("when state is either not initialized, or already removed")
+  @throws[UnsupportedOperationException](
+    "if 'timeout' has not been enabled in [map|flatMap]GroupsWithState in a streaming query")
   override def setTimeoutTimestamp(timestamp: Date): Unit = {
     checkTimeoutTimestampAllowed()
     setTimeoutTimestamp(timestamp.getTime)
   }
 
+  @throws[IllegalArgumentException]("if 'additionalDuration' is invalid")
+  @throws[IllegalStateException]("when state is either not initialized, or already removed")
+  @throws[UnsupportedOperationException](
+    "if 'timeout' has not been enabled in [map|flatMap]GroupsWithState in a streaming query")
   override def setTimeoutTimestamp(timestamp: Date, additionalDuration: String): Unit = {
     checkTimeoutTimestampAllowed()
     setTimeoutTimestamp(timestamp.getTime + parseDuration(additionalDuration))
-  }
-
-  override def getCurrentWatermarkMs(): Long = {
-    if (!watermarkPresent) {
-      throw new UnsupportedOperationException(
-        "Cannot get event time watermark timestamp without setting watermark before " +
-          "[map|flatMap]GroupsWithState")
-    }
-    eventTimeWatermarkMs
-  }
-
-  override def getCurrentProcessingTimeMs(): Long = {
-    batchProcessingTimeMs
   }
 
   override def toString: String = {
@@ -159,12 +161,25 @@ private[sql] class GroupStateImpl[S] private(
   def getTimeoutTimestamp: Long = timeoutTimestamp
 
   private def parseDuration(duration: String): Long = {
-    val cal = CalendarInterval.fromCaseInsensitiveString(duration)
+    if (StringUtils.isBlank(duration)) {
+      throw new IllegalArgumentException(
+        "Provided duration is null or blank.")
+    }
+    val intervalString = if (duration.startsWith("interval")) {
+      duration
+    } else {
+      "interval " + duration
+    }
+    val cal = CalendarInterval.fromString(intervalString)
+    if (cal == null) {
+      throw new IllegalArgumentException(
+        s"Provided duration ($duration) is not valid.")
+    }
     if (cal.milliseconds < 0 || cal.months < 0) {
       throw new IllegalArgumentException(s"Provided duration ($duration) is not positive")
     }
 
-    val millisPerMonth = TimeUnit.MICROSECONDS.toMillis(CalendarInterval.MICROS_PER_DAY) * 31
+    val millisPerMonth = CalendarInterval.MICROS_PER_DAY / 1000 * 31
     cal.milliseconds + cal.months * millisPerMonth
   }
 
@@ -172,7 +187,7 @@ private[sql] class GroupStateImpl[S] private(
     if (timeoutConf != EventTimeTimeout) {
       throw new UnsupportedOperationException(
         "Cannot set timeout timestamp without enabling event time timeout in " +
-          "[map|flatMapGroupsWithState")
+          "map/flatMapGroupsWithState")
     }
   }
 }
@@ -187,22 +202,17 @@ private[sql] object GroupStateImpl {
       batchProcessingTimeMs: Long,
       eventTimeWatermarkMs: Long,
       timeoutConf: GroupStateTimeout,
-      hasTimedOut: Boolean,
-      watermarkPresent: Boolean): GroupStateImpl[S] = {
+      hasTimedOut: Boolean): GroupStateImpl[S] = {
     new GroupStateImpl[S](
-      optionalValue, batchProcessingTimeMs, eventTimeWatermarkMs,
-      timeoutConf, hasTimedOut, watermarkPresent)
+      optionalValue, batchProcessingTimeMs, eventTimeWatermarkMs, timeoutConf, hasTimedOut)
   }
 
-  def createForBatch(
-      timeoutConf: GroupStateTimeout,
-      watermarkPresent: Boolean): GroupStateImpl[Any] = {
+  def createForBatch(timeoutConf: GroupStateTimeout): GroupStateImpl[Any] = {
     new GroupStateImpl[Any](
       optionalValue = None,
-      batchProcessingTimeMs = System.currentTimeMillis,
+      batchProcessingTimeMs = NO_TIMESTAMP,
       eventTimeWatermarkMs = NO_TIMESTAMP,
       timeoutConf,
-      hasTimedOut = false,
-      watermarkPresent)
+      hasTimedOut = false)
   }
 }

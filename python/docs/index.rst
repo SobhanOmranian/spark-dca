@@ -37,7 +37,7 @@ Core classes:
 
     A Discretized Stream (DStream), the basic abstraction in Spark Streaming.
 
-    :class:`pyspark.sql.SparkSession`
+    :class:`pyspark.sql.SQLContext`
 
     Main entry point for DataFrame and SQL functionality.
 

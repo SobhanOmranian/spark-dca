@@ -28,6 +28,7 @@ NULL
 #' @seealso \link{windowPartitionBy}, \link{windowOrderBy}
 #'
 #' @param sws A Java object reference to the backing Scala WindowSpec
+#' @export
 #' @note WindowSpec since 2.0.0
 setClass("WindowSpec",
          slots = list(sws = "jobj"))
@@ -43,6 +44,7 @@ windowSpec <- function(sws) {
 }
 
 #' @rdname show
+#' @export
 #' @note show(WindowSpec) since 2.0.0
 setMethod("show", "WindowSpec",
           function(object) {
@@ -61,6 +63,7 @@ setMethod("show", "WindowSpec",
 #' @name partitionBy
 #' @aliases partitionBy,WindowSpec-method
 #' @family windowspec_method
+#' @export
 #' @examples
 #' \dontrun{
 #'   partitionBy(ws, "col1", "col2")
@@ -70,7 +73,7 @@ setMethod("show", "WindowSpec",
 setMethod("partitionBy",
           signature(x = "WindowSpec"),
           function(x, col, ...) {
-            stopifnot(class(col) %in% c("character", "Column"))
+            stopifnot (class(col) %in% c("character", "Column"))
 
             if (class(col) == "character") {
               windowSpec(callJMethod(x@sws, "partitionBy", col, list(...)))
@@ -94,6 +97,7 @@ setMethod("partitionBy",
 #' @aliases orderBy,WindowSpec,character-method
 #' @family windowspec_method
 #' @seealso See \link{arrange} for use in sorting a SparkDataFrame
+#' @export
 #' @examples
 #' \dontrun{
 #'   orderBy(ws, "col1", "col2")
@@ -109,6 +113,7 @@ setMethod("orderBy",
 #' @rdname orderBy
 #' @name orderBy
 #' @aliases orderBy,WindowSpec,Column-method
+#' @export
 #' @note orderBy(WindowSpec, Column) since 2.0.0
 setMethod("orderBy",
           signature(x = "WindowSpec", col = "Column"),
@@ -127,16 +132,6 @@ setMethod("orderBy",
 #' "0" means "current row", while "-1" means the row before the current row, and "5" means the
 #' fifth row after the current row.
 #'
-#' We recommend users use \code{Window.unboundedPreceding}, \code{Window.unboundedFollowing},
-#' and \code{Window.currentRow} to specify special boundary values, rather than using long values
-#' directly.
-#'
-#' A row based boundary is based on the position of the row within the partition.
-#' An offset indicates the number of rows above or below the current row, the frame for the
-#' current row starts or ends. For instance, given a row based sliding frame with a lower bound
-#' offset of -1 and a upper bound offset of +2. The frame for row with index 5 would range from
-#' index 4 to index 6.
-#'
 #' @param x a WindowSpec
 #' @param start boundary start, inclusive.
 #'              The frame is unbounded if this is the minimum long value.
@@ -147,16 +142,10 @@ setMethod("orderBy",
 #' @aliases rowsBetween,WindowSpec,numeric,numeric-method
 #' @name rowsBetween
 #' @family windowspec_method
+#' @export
 #' @examples
 #' \dontrun{
-#'   id <- c(rep(1, 3), rep(2, 3), 3)
-#'   desc <- c('New', 'New', 'Good', 'New', 'Good', 'Good', 'New')
-#'   df <- data.frame(id, desc)
-#'   df <- createDataFrame(df)
-#'   w1 <- orderBy(windowPartitionBy('desc'), df$id)
-#'   w2 <- rowsBetween(w1, 0, 3)
-#'   df1 <- withColumn(df, "sum", over(sum(df$id), w2))
-#'   head(df1)
+#'   rowsBetween(ws, 0, 3)
 #' }
 #' @note rowsBetween since 2.0.0
 setMethod("rowsBetween",
@@ -175,19 +164,6 @@ setMethod("rowsBetween",
 #' "current row", while "-1" means one off before the current row, and "5" means the five off
 #' after the current row.
 #'
-#' We recommend users use \code{Window.unboundedPreceding}, \code{Window.unboundedFollowing},
-#' and \code{Window.currentRow} to specify special boundary values, rather than using long values
-#' directly.
-#'
-#' A range-based boundary is based on the actual value of the ORDER BY
-#' expression(s). An offset is used to alter the value of the ORDER BY expression,
-#' for instance if the current ORDER BY expression has a value of 10 and the lower bound offset
-#' is -3, the resulting lower bound for the current row will be 10 - 3 = 7. This however puts a
-#' number of constraints on the ORDER BY expressions: there can be only one expression and this
-#' expression must have a numerical data type. An exception can be made when the offset is
-#' unbounded, because no value modification is needed, in this case multiple and non-numeric
-#' ORDER BY expression are allowed.
-#'
 #' @param x a WindowSpec
 #' @param start boundary start, inclusive.
 #'              The frame is unbounded if this is the minimum long value.
@@ -198,16 +174,10 @@ setMethod("rowsBetween",
 #' @aliases rangeBetween,WindowSpec,numeric,numeric-method
 #' @name rangeBetween
 #' @family windowspec_method
+#' @export
 #' @examples
 #' \dontrun{
-#'   id <- c(rep(1, 3), rep(2, 3), 3)
-#'   desc <- c('New', 'New', 'Good', 'New', 'Good', 'Good', 'New')
-#'   df <- data.frame(id, desc)
-#'   df <- createDataFrame(df)
-#'   w1 <- orderBy(windowPartitionBy('desc'), df$id)
-#'   w2 <- rangeBetween(w1, 0, 3)
-#'   df1 <- withColumn(df, "sum", over(sum(df$id), w2))
-#'   head(df1)
+#'   rangeBetween(ws, 0, 3)
 #' }
 #' @note rangeBetween since 2.0.0
 setMethod("rangeBetween",
@@ -232,8 +202,8 @@ setMethod("rangeBetween",
 #' @name over
 #' @aliases over,Column,WindowSpec-method
 #' @family colum_func
-#' @examples
-#' \dontrun{
+#' @export
+#' @examples \dontrun{
 #'   df <- createDataFrame(mtcars)
 #'
 #'   # Partition by am (transmission) and order by hp (horsepower)

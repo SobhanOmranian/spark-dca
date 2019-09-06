@@ -24,6 +24,7 @@ import scala.reflect.ClassTag
 import org.mockito.Mockito
 import org.mockito.Mockito.atLeastOnce
 import org.mockito.invocation.InvocationOnMock
+import org.mockito.stubbing.Answer
 import org.scalatest.{BeforeAndAfterEach, PrivateMethodTester}
 
 import org.apache.spark.{SparkConf, SparkFunSuite, TaskContext, TaskContextImpl}
@@ -58,9 +59,11 @@ class PartiallySerializedBlockSuite
 
     val bbos: ChunkedByteBufferOutputStream = {
       val spy = Mockito.spy(new ChunkedByteBufferOutputStream(128, ByteBuffer.allocate))
-      Mockito.doAnswer { (invocationOnMock: InvocationOnMock) =>
-        Mockito.spy(invocationOnMock.callRealMethod().asInstanceOf[ChunkedByteBuffer])
-      }.when(spy).toChunkedByteBuffer
+      Mockito.doAnswer(new Answer[ChunkedByteBuffer] {
+        override def answer(invocationOnMock: InvocationOnMock): ChunkedByteBuffer = {
+          Mockito.spy(invocationOnMock.callRealMethod().asInstanceOf[ChunkedByteBuffer])
+        }
+      }).when(spy).toChunkedByteBuffer
       spy
     }
 

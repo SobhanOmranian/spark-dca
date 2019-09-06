@@ -45,7 +45,7 @@ import org.apache.spark.network.server.StreamManager;
 import org.apache.spark.network.server.TransportServer;
 import org.apache.spark.network.server.TransportServerBootstrap;
 import org.apache.spark.network.shuffle.BlockFetchingListener;
-import org.apache.spark.network.shuffle.ExternalBlockHandler;
+import org.apache.spark.network.shuffle.ExternalShuffleBlockHandler;
 import org.apache.spark.network.shuffle.ExternalShuffleBlockResolver;
 import org.apache.spark.network.shuffle.OneForOneBlockFetcher;
 import org.apache.spark.network.shuffle.protocol.BlockTransferMessage;
@@ -91,7 +91,6 @@ public class SaslIntegrationSuite {
   @AfterClass
   public static void afterAll() {
     server.close();
-    context.close();
   }
 
   @After
@@ -154,14 +153,13 @@ public class SaslIntegrationSuite {
   @Test
   public void testNoSaslServer() {
     RpcHandler handler = new TestRpcHandler();
-    try (TransportContext context = new TransportContext(conf, handler)) {
-      clientFactory = context.createClientFactory(
-          Arrays.asList(new SaslClientBootstrap(conf, "app-1", secretKeyHolder)));
-      try (TransportServer server = context.createServer()) {
-        clientFactory.createClient(TestUtils.getLocalHost(), server.getPort());
-      } catch (Exception e) {
-        assertTrue(e.getMessage(), e.getMessage().contains("Digest-challenge format violation"));
-      }
+    TransportContext context = new TransportContext(conf, handler);
+    clientFactory = context.createClientFactory(
+      Arrays.asList(new SaslClientBootstrap(conf, "app-1", secretKeyHolder)));
+    try (TransportServer server = context.createServer()) {
+      clientFactory.createClient(TestUtils.getLocalHost(), server.getPort());
+    } catch (Exception e) {
+      assertTrue(e.getMessage(), e.getMessage().contains("Digest-challenge format violation"));
     }
   }
 
@@ -173,18 +171,21 @@ public class SaslIntegrationSuite {
   public void testAppIsolation() throws Exception {
     // Start a new server with the correct RPC handler to serve block data.
     ExternalShuffleBlockResolver blockResolver = mock(ExternalShuffleBlockResolver.class);
-    ExternalBlockHandler blockHandler = new ExternalBlockHandler(
+    ExternalShuffleBlockHandler blockHandler = new ExternalShuffleBlockHandler(
       new OneForOneStreamManager(), blockResolver);
     TransportServerBootstrap bootstrap = new SaslServerBootstrap(conf, secretKeyHolder);
+    TransportContext blockServerContext = new TransportContext(conf, blockHandler);
+    TransportServer blockServer = blockServerContext.createServer(Arrays.asList(bootstrap));
 
-    try (
-      TransportContext blockServerContext = new TransportContext(conf, blockHandler);
-      TransportServer blockServer = blockServerContext.createServer(Arrays.asList(bootstrap));
+    TransportClient client1 = null;
+    TransportClient client2 = null;
+    TransportClientFactory clientFactory2 = null;
+    try {
       // Create a client, and make a request to fetch blocks from a different app.
-      TransportClientFactory clientFactory1 = blockServerContext.createClientFactory(
+      clientFactory = blockServerContext.createClientFactory(
           Arrays.asList(new SaslClientBootstrap(conf, "app-1", secretKeyHolder)));
-      TransportClient client1 = clientFactory1.createClient(
-          TestUtils.getLocalHost(), blockServer.getPort())) {
+      client1 = clientFactory.createClient(TestUtils.getLocalHost(),
+        blockServer.getPort());
 
       AtomicReference<Throwable> exception = new AtomicReference<>();
 
@@ -201,7 +202,7 @@ public class SaslIntegrationSuite {
         }
       };
 
-      String[] blockIds = { "shuffle_0_1_2", "shuffle_0_3_4" };
+      String[] blockIds = { "shuffle_2_3_4", "shuffle_6_7_8" };
       OneForOneBlockFetcher fetcher =
           new OneForOneBlockFetcher(client1, "app-2", "0", blockIds, listener, conf);
       fetcher.start();
@@ -222,33 +223,41 @@ public class SaslIntegrationSuite {
       StreamHandle stream = (StreamHandle) BlockTransferMessage.Decoder.fromByteBuffer(response);
       long streamId = stream.streamId;
 
-      try (
-        // Create a second client, authenticated with a different app ID, and try to read from
-        // the stream created for the previous app.
-        TransportClientFactory clientFactory2 = blockServerContext.createClientFactory(
-            Arrays.asList(new SaslClientBootstrap(conf, "app-2", secretKeyHolder)));
-        TransportClient client2 = clientFactory2.createClient(
-            TestUtils.getLocalHost(), blockServer.getPort())
-      ) {
-        CountDownLatch chunkReceivedLatch = new CountDownLatch(1);
-        ChunkReceivedCallback callback = new ChunkReceivedCallback() {
-          @Override
-          public void onSuccess(int chunkIndex, ManagedBuffer buffer) {
-            chunkReceivedLatch.countDown();
-          }
+      // Create a second client, authenticated with a different app ID, and try to read from
+      // the stream created for the previous app.
+      clientFactory2 = blockServerContext.createClientFactory(
+          Arrays.asList(new SaslClientBootstrap(conf, "app-2", secretKeyHolder)));
+      client2 = clientFactory2.createClient(TestUtils.getLocalHost(),
+        blockServer.getPort());
 
-          @Override
-          public void onFailure(int chunkIndex, Throwable t) {
-            exception.set(t);
-            chunkReceivedLatch.countDown();
-          }
-        };
+      CountDownLatch chunkReceivedLatch = new CountDownLatch(1);
+      ChunkReceivedCallback callback = new ChunkReceivedCallback() {
+        @Override
+        public void onSuccess(int chunkIndex, ManagedBuffer buffer) {
+          chunkReceivedLatch.countDown();
+        }
+        @Override
+        public void onFailure(int chunkIndex, Throwable t) {
+          exception.set(t);
+          chunkReceivedLatch.countDown();
+        }
+      };
 
-        exception.set(null);
-        client2.fetchChunk(streamId, 0, callback);
-        chunkReceivedLatch.await();
-        checkSecurityException(exception.get());
+      exception.set(null);
+      client2.fetchChunk(streamId, 0, callback);
+      chunkReceivedLatch.await();
+      checkSecurityException(exception.get());
+    } finally {
+      if (client1 != null) {
+        client1.close();
       }
+      if (client2 != null) {
+        client2.close();
+      }
+      if (clientFactory2 != null) {
+        clientFactory2.close();
+      }
+      blockServer.close();
     }
   }
 

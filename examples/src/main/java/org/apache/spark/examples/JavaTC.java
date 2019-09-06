@@ -71,7 +71,7 @@ public final class JavaTC {
 
     JavaSparkContext jsc = new JavaSparkContext(spark.sparkContext());
 
-    int slices = (args.length > 0) ? Integer.parseInt(args[0]): 2;
+    Integer slices = (args.length > 0) ? Integer.parseInt(args[0]): 2;
     JavaPairRDD<Integer, Integer> tc = jsc.parallelizePairs(generateGraph(), slices).cache();
 
     // Linear transitive closure: each round grows paths by one edge,

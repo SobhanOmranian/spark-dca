@@ -78,9 +78,9 @@ private[spark] class DTStatsAggregator(
 
   /**
    * Array of parent node sufficient stats.
-   * Note: parent stats need to be explicitly tracked in the [[DTStatsAggregator]] for unordered
-   *       categorical features, because the parent [[Node]] object does not have [[ImpurityStats]]
-   *       on the first iteration.
+   *
+   * Note: this is necessary because stats for the parent node are not available
+   *       on the first iteration of tree learning.
    */
   private val parentStats: Array[Double] = new Array[Double](statsSize)
 
@@ -104,21 +104,16 @@ private[spark] class DTStatsAggregator(
   /**
    * Update the stats for a given (feature, bin) for ordered features, using the given label.
    */
-  def update(
-      featureIndex: Int,
-      binIndex: Int,
-      label: Double,
-      numSamples: Int,
-      sampleWeight: Double): Unit = {
+  def update(featureIndex: Int, binIndex: Int, label: Double, instanceWeight: Double): Unit = {
     val i = featureOffsets(featureIndex) + binIndex * statsSize
-    impurityAggregator.update(allStats, i, label, numSamples, sampleWeight)
+    impurityAggregator.update(allStats, i, label, instanceWeight)
   }
 
   /**
    * Update the parent node stats using the given label.
    */
-  def updateParent(label: Double, numSamples: Int, sampleWeight: Double): Unit = {
-    impurityAggregator.update(parentStats, 0, label, numSamples, sampleWeight)
+  def updateParent(label: Double, instanceWeight: Double): Unit = {
+    impurityAggregator.update(parentStats, 0, label, instanceWeight)
   }
 
   /**
@@ -132,10 +127,9 @@ private[spark] class DTStatsAggregator(
       featureOffset: Int,
       binIndex: Int,
       label: Double,
-      numSamples: Int,
-      sampleWeight: Double): Unit = {
+      instanceWeight: Double): Unit = {
     impurityAggregator.update(allStats, featureOffset + binIndex * statsSize,
-      label, numSamples, sampleWeight)
+      label, instanceWeight)
   }
 
   /**

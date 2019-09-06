@@ -20,7 +20,6 @@ package org.apache.spark.streaming
 import java.io.{File, IOException}
 import java.nio.charset.StandardCharsets
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
@@ -235,12 +234,12 @@ object MasterFailureTest extends Logging {
         System.clearProperty("spark.streaming.clock")
         System.clearProperty("spark.driver.port")
         ssc.start()
-        val startTimeNs = System.nanoTime()
+        val startTime = System.currentTimeMillis()
         while (!killed && !isLastOutputGenerated && !isTimedOut) {
           Thread.sleep(100)
-          timeRan = System.nanoTime() - startTimeNs
+          timeRan = System.currentTimeMillis() - startTime
           isLastOutputGenerated = (output.nonEmpty && output.last == lastExpectedOutput)
-          isTimedOut = (timeRan + totalTimeRan > TimeUnit.MILLISECONDS.toNanos(maxTimeToRun))
+          isTimedOut = (timeRan + totalTimeRan > maxTimeToRun)
         }
       } catch {
         case e: Exception => logError("Error running streaming context", e)
@@ -266,7 +265,7 @@ object MasterFailureTest extends Logging {
       logInfo("New output = " + output.toSeq)
       logInfo("Merged output = " + mergedOutput)
       logInfo("Time ran = " + timeRan)
-      logInfo("Total time ran = " + TimeUnit.NANOSECONDS.toMillis(totalTimeRan))
+      logInfo("Total time ran = " + totalTimeRan)
 
       if (!isLastOutputGenerated && !isTimedOut) {
         val sleepTime = Random.nextInt(batchDuration.milliseconds.toInt * 10)

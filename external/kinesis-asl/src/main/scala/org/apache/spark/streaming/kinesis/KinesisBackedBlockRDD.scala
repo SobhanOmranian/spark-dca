@@ -17,8 +17,6 @@
 
 package org.apache.spark.streaming.kinesis
 
-import java.util.concurrent.TimeUnit
-
 import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
@@ -253,16 +251,13 @@ class KinesisSequenceRangeIterator(
 
   /** Helper method to retry Kinesis API request with exponential backoff and timeouts */
   private def retryOrTimeout[T](message: String)(body: => T): T = {
-    val startTimeNs = System.nanoTime()
+    val startTimeMs = System.currentTimeMillis()
     var retryCount = 0
     var result: Option[T] = None
     var lastError: Throwable = null
     var waitTimeInterval = kinesisReadConfigs.retryWaitTimeMs
 
-    def isTimedOut = {
-      val retryTimeoutNs = TimeUnit.MILLISECONDS.toNanos(kinesisReadConfigs.retryTimeoutMs)
-      (System.nanoTime() - startTimeNs) >= retryTimeoutNs
-    }
+    def isTimedOut = (System.currentTimeMillis() - startTimeMs) >= kinesisReadConfigs.retryTimeoutMs
     def isMaxRetryDone = retryCount >= kinesisReadConfigs.maxRetries
 
     while (result.isEmpty && !isTimedOut && !isMaxRetryDone) {

@@ -40,7 +40,7 @@ private[spark] object RpcEnv {
       conf: SparkConf,
       securityManager: SecurityManager,
       clientMode: Boolean = false): RpcEnv = {
-    create(name, host, host, port, conf, securityManager, 0, clientMode)
+    create(name, host, host, port, conf, securityManager, clientMode)
   }
 
   def create(
@@ -50,10 +50,9 @@ private[spark] object RpcEnv {
       port: Int,
       conf: SparkConf,
       securityManager: SecurityManager,
-      numUsableCores: Int,
       clientMode: Boolean): RpcEnv = {
     val config = RpcEnvConfig(conf, name, bindAddress, advertiseAddress, port, securityManager,
-      numUsableCores, clientMode)
+      clientMode)
     new NettyRpcEnvFactory().create(config)
   }
 }
@@ -202,5 +201,4 @@ private[spark] case class RpcEnvConfig(
     advertiseAddress: String,
     port: Int,
     securityManager: SecurityManager,
-    numUsableCores: Int,
     clientMode: Boolean)

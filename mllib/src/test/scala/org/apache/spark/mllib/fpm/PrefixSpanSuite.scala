@@ -16,6 +16,8 @@
  */
 package org.apache.spark.mllib.fpm
 
+import scala.language.existentials
+
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.mllib.util.MLlibTestSparkContext
 import org.apache.spark.util.Utils
@@ -418,9 +420,7 @@ class PrefixSpanSuite extends SparkFunSuite with MLlibTestSparkContext {
     val path = tempDir.toURI.toString
     try {
       model.save(sc, path)
-      // Save/loading this model results in item type "Object" even if in this case
-      // the objects are Integers -- not Int as in the original saved model.
-      val newModel = PrefixSpanModel.load(sc, path).asInstanceOf[PrefixSpanModel[AnyRef]]
+      val newModel = PrefixSpanModel.load(sc, path)
       val originalSet = model.freqSequences.collect().map { x =>
         (x.sequence.map(_.toSet).toSeq, x.freq)
       }.toSet

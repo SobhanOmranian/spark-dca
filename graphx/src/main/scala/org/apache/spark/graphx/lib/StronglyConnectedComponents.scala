@@ -72,7 +72,7 @@ object StronglyConnectedComponents {
         sccGraph.vertices.count()
         sccGraph.edges.count()
         // sccGraph materialized so, unpersist can be done on previous
-        prevSccGraph.unpersist()
+        prevSccGraph.unpersist(blocking = false)
         prevSccGraph = sccGraph
 
         // only keep vertices that are not final

@@ -23,8 +23,8 @@ import scala.collection.mutable
 
 import org.apache.spark._
 import org.apache.spark.memory.{TaskMemoryManager, TestMemoryManager}
-import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
 import org.apache.spark.unsafe.KVIterator
 
@@ -39,11 +39,7 @@ class SortBasedAggregationStoreSuite  extends SparkFunSuite with LocalSparkConte
       new TaskContextImpl(0, 0, 0, 0, 0, taskManager, new Properties, null))
   }
 
-  override def afterAll(): Unit = try {
-    TaskContext.unset()
-  } finally {
-    super.afterAll()
-  }
+  override def afterAll(): Unit = TaskContext.unset()
 
   private val rand = new java.util.Random()
 

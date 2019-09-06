@@ -27,11 +27,9 @@ import org.apache.spark.HashPartitioner;
 import org.apache.spark.SparkConf;
 import org.apache.spark.memory.TestMemoryConsumer;
 import org.apache.spark.memory.TestMemoryManager;
-import org.apache.spark.memory.SparkOutOfMemoryError;
 import org.apache.spark.memory.TaskMemoryManager;
 import org.apache.spark.unsafe.Platform;
 import org.apache.spark.unsafe.memory.MemoryBlock;
-import org.apache.spark.internal.config.package$;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -53,8 +51,7 @@ public class UnsafeInMemorySorterSuite {
   @Test
   public void testSortingEmptyInput() {
     final TaskMemoryManager memoryManager = new TaskMemoryManager(
-      new TestMemoryManager(
-        new SparkConf().set(package$.MODULE$.MEMORY_OFFHEAP_ENABLED(), false)), 0);
+      new TestMemoryManager(new SparkConf().set("spark.memory.offHeap.enabled", "false")), 0);
     final TestMemoryConsumer consumer = new TestMemoryConsumer(memoryManager);
     final UnsafeInMemorySorter sorter = new UnsafeInMemorySorter(consumer,
       memoryManager,
@@ -80,8 +77,7 @@ public class UnsafeInMemorySorterSuite {
       "Mango"
     };
     final TaskMemoryManager memoryManager = new TaskMemoryManager(
-      new TestMemoryManager(
-        new SparkConf().set(package$.MODULE$.MEMORY_OFFHEAP_ENABLED(), false)), 0);
+      new TestMemoryManager(new SparkConf().set("spark.memory.offHeap.enabled", "false")), 0);
     final TestMemoryConsumer consumer = new TestMemoryConsumer(memoryManager);
     final MemoryBlock dataPage = memoryManager.allocatePage(2048, consumer);
     final Object baseObject = dataPage.getBaseObject();
@@ -133,6 +129,7 @@ public class UnsafeInMemorySorterSuite {
     final UnsafeSorterIterator iter = sorter.getSortedIterator();
     int iterLength = 0;
     long prevPrefix = -1;
+    Arrays.sort(dataToSort);
     while (iter.hasNext()) {
       iter.loadNext();
       final String str =
@@ -149,7 +146,7 @@ public class UnsafeInMemorySorterSuite {
   @Test
   public void freeAfterOOM() {
     final SparkConf sparkConf = new SparkConf();
-    sparkConf.set(package$.MODULE$.MEMORY_OFFHEAP_ENABLED(), false);
+    sparkConf.set("spark.memory.offHeap.enabled", "false");
 
     final TestMemoryManager testMemoryManager =
             new TestMemoryManager(sparkConf);
@@ -182,8 +179,8 @@ public class UnsafeInMemorySorterSuite {
     testMemoryManager.markExecutionAsOutOfMemoryOnce();
     try {
       sorter.reset();
-      fail("expected SparkOutOfMemoryError but it seems operation surprisingly succeeded");
-    } catch (SparkOutOfMemoryError oom) {
+      fail("expected OutOfMmoryError but it seems operation surprisingly succeeded");
+    } catch (OutOfMemoryError oom) {
       // as expected
     }
     // [SPARK-21907] this failed on NPE at

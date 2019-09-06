@@ -62,7 +62,7 @@ object DecisionTreeClassificationExample {
     val labelConverter = new IndexToString()
       .setInputCol("prediction")
       .setOutputCol("predictedLabel")
-      .setLabels(labelIndexer.labelsArray(0))
+      .setLabels(labelIndexer.labels)
 
     // Chain indexers and tree in a Pipeline.
     val pipeline = new Pipeline()
@@ -83,10 +83,10 @@ object DecisionTreeClassificationExample {
       .setPredictionCol("prediction")
       .setMetricName("accuracy")
     val accuracy = evaluator.evaluate(predictions)
-    println(s"Test Error = ${(1.0 - accuracy)}")
+    println("Test Error = " + (1.0 - accuracy))
 
     val treeModel = model.stages(2).asInstanceOf[DecisionTreeClassificationModel]
-    println(s"Learned classification tree model:\n ${treeModel.toDebugString}")
+    println("Learned classification tree model:\n" + treeModel.toDebugString)
     // $example off$
 
     spark.stop()

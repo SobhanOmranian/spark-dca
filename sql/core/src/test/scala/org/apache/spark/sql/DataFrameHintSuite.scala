@@ -17,11 +17,11 @@
 
 package org.apache.spark.sql
 
-import org.apache.spark.sql.catalyst.analysis.AnalysisTest
+import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.catalyst.plans.logical._
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 
-class DataFrameHintSuite extends AnalysisTest with SharedSparkSession {
+class DataFrameHintSuite extends PlanTest with SharedSQLContext {
   import testImplicits._
   lazy val df = spark.range(10)
 
@@ -58,15 +58,5 @@ class DataFrameHintSuite extends AnalysisTest with SharedSparkSession {
         df.logicalPlan
       )
     )
-  }
-
-  test("coalesce and repartition hint") {
-    check(
-      df.hint("COALESCE", 10),
-      UnresolvedHint("COALESCE", Seq(10), df.logicalPlan))
-
-    check(
-      df.hint("REPARTITION", 100),
-      UnresolvedHint("REPARTITION", Seq(100), df.logicalPlan))
   }
 }

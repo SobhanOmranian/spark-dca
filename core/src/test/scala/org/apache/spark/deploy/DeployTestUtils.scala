@@ -18,12 +18,11 @@
 package org.apache.spark.deploy
 
 import java.io.File
+import java.util.Date
 
 import org.apache.spark.{SecurityManager, SparkConf}
-import org.apache.spark.deploy.master.{ApplicationInfo, DriverInfo, WorkerInfo, WorkerResourceInfo}
+import org.apache.spark.deploy.master.{ApplicationInfo, DriverInfo, WorkerInfo}
 import org.apache.spark.deploy.worker.{DriverRunner, ExecutorRunner}
-import org.apache.spark.resource.{ResourceInformation, ResourceRequirement}
-import org.apache.spark.resource.ResourceUtils.{FPGA, GPU}
 
 private[deploy] object DeployTestUtils {
   def createAppDesc(): ApplicationDescription = {
@@ -34,43 +33,29 @@ private[deploy] object DeployTestUtils {
   def createAppInfo() : ApplicationInfo = {
     val appDesc = createAppDesc()
     val appInfo = new ApplicationInfo(JsonConstants.appInfoStartTime,
-      "id", appDesc.copy(resourceReqsPerExecutor = createResourceRequirement),
-      JsonConstants.submitDate, null, Int.MaxValue)
+      "id", appDesc, JsonConstants.submitDate, null, Int.MaxValue)
     appInfo.endTime = JsonConstants.currTimeInMillis
     appInfo
   }
 
   def createDriverCommand(): Command = new Command(
-    "org.apache.spark.FakeClass", Seq("WORKER_URL", "USER_JAR", "mainClass"),
+    "org.apache.spark.FakeClass", Seq("some arg --and-some options -g foo"),
     Map(("K1", "V1"), ("K2", "V2")), Seq("cp1", "cp2"), Seq("lp1", "lp2"), Seq("-Dfoo")
   )
 
   def createDriverDesc(): DriverDescription =
     new DriverDescription("hdfs://some-dir/some.jar", 100, 3, false, createDriverCommand())
 
-  def createDriverInfo(): DriverInfo = {
-    val dDesc = createDriverDesc().copy(resourceReqs = createResourceRequirement)
-    val dInfo = new DriverInfo(3, "driver-3", dDesc, JsonConstants.submitDate)
-    dInfo.withResources(createResourceInformation)
-    dInfo
-  }
+  def createDriverInfo(): DriverInfo = new DriverInfo(3, "driver-3",
+    createDriverDesc(), new Date())
 
   def createWorkerInfo(): WorkerInfo = {
-    val gpuResource = new WorkerResourceInfo(GPU, Seq("0", "1", "2"))
-    val fpgaResource = new WorkerResourceInfo(FPGA, Seq("3", "4", "5"))
-    val resources = Map(GPU -> gpuResource, FPGA -> fpgaResource)
-    val workerInfo = new WorkerInfo("id", "host", 8080, 4, 1234, null,
-      "http://publicAddress:80", resources)
+    val workerInfo = new WorkerInfo("id", "host", 8080, 4, 1234, null, "http://publicAddress:80")
     workerInfo.lastHeartbeat = JsonConstants.currTimeInMillis
     workerInfo
   }
 
-  def createExecutorRunner(execId: Int, withResources: Boolean = false): ExecutorRunner = {
-    val resources = if (withResources) {
-      createResourceInformation
-    } else {
-      Map.empty[String, ResourceInformation]
-    }
+  def createExecutorRunner(execId: Int): ExecutorRunner = {
     new ExecutorRunner(
       "appId",
       execId,
@@ -79,7 +64,6 @@ private[deploy] object DeployTestUtils {
       1234,
       null,
       "workerId",
-      "http://",
       "host",
       123,
       "publicAddress",
@@ -88,8 +72,7 @@ private[deploy] object DeployTestUtils {
       "spark://worker",
       new SparkConf,
       Seq("localDir"),
-      ExecutorState.RUNNING,
-      resources)
+      ExecutorState.RUNNING)
   }
 
   def createDriverRunner(driverId: String): DriverRunner = {
@@ -103,15 +86,5 @@ private[deploy] object DeployTestUtils {
       null,
       "spark://worker",
       new SecurityManager(conf))
-  }
-
-  private def createResourceInformation: Map[String, ResourceInformation] = {
-    val gpuResource = new ResourceInformation(GPU, Array("0", "1", "2"))
-    val fpgaResource = new ResourceInformation(FPGA, Array("3", "4", "5"))
-    Map(GPU -> gpuResource, FPGA -> fpgaResource)
-  }
-
-  private def createResourceRequirement: Seq[ResourceRequirement] = {
-    Seq(ResourceRequirement("gpu", 3), ResourceRequirement("fpga", 3))
   }
 }

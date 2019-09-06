@@ -43,21 +43,22 @@ private[kafka010] object KafkaWriter extends Logging {
   override def toString: String = "KafkaWriter"
 
   def validateQuery(
-      schema: Seq[Attribute],
+      queryExecution: QueryExecution,
       kafkaParameters: ju.Map[String, Object],
       topic: Option[String] = None): Unit = {
+    val schema = queryExecution.analyzed.output
     schema.find(_.name == TOPIC_ATTRIBUTE_NAME).getOrElse(
       if (topic.isEmpty) {
         throw new AnalysisException(s"topic option required when no " +
           s"'$TOPIC_ATTRIBUTE_NAME' attribute is present. Use the " +
           s"${KafkaSourceProvider.TOPIC_OPTION_KEY} option for setting a topic.")
       } else {
-        Literal.create(topic.get, StringType)
+        Literal(topic.get, StringType)
       }
     ).dataType match {
       case StringType => // good
       case _ =>
-        throw new AnalysisException(s"Topic type must be a ${StringType.catalogString}")
+        throw new AnalysisException(s"Topic type must be a String")
     }
     schema.find(_.name == KEY_ATTRIBUTE_NAME).getOrElse(
       Literal(null, StringType)
@@ -65,7 +66,7 @@ private[kafka010] object KafkaWriter extends Logging {
       case StringType | BinaryType => // good
       case _ =>
         throw new AnalysisException(s"$KEY_ATTRIBUTE_NAME attribute type " +
-          s"must be a ${StringType.catalogString} or ${BinaryType.catalogString}")
+          s"must be a String or BinaryType")
     }
     schema.find(_.name == VALUE_ATTRIBUTE_NAME).getOrElse(
       throw new AnalysisException(s"Required attribute '$VALUE_ATTRIBUTE_NAME' not found")
@@ -73,7 +74,7 @@ private[kafka010] object KafkaWriter extends Logging {
       case StringType | BinaryType => // good
       case _ =>
         throw new AnalysisException(s"$VALUE_ATTRIBUTE_NAME attribute type " +
-          s"must be a ${StringType.catalogString} or ${BinaryType.catalogString}")
+          s"must be a String or BinaryType")
     }
   }
 
@@ -83,11 +84,13 @@ private[kafka010] object KafkaWriter extends Logging {
       kafkaParameters: ju.Map[String, Object],
       topic: Option[String] = None): Unit = {
     val schema = queryExecution.analyzed.output
-    validateQuery(schema, kafkaParameters, topic)
-    queryExecution.toRdd.foreachPartition { iter =>
-      val writeTask = new KafkaWriteTask(kafkaParameters, schema, topic)
-      Utils.tryWithSafeFinally(block = writeTask.execute(iter))(
-        finallyBlock = writeTask.close())
+    validateQuery(queryExecution, kafkaParameters, topic)
+    SQLExecution.withNewExecutionId(sparkSession, queryExecution) {
+      queryExecution.toRdd.foreachPartition { iter =>
+        val writeTask = new KafkaWriteTask(kafkaParameters, schema, topic)
+        Utils.tryWithSafeFinally(block = writeTask.execute(iter))(
+          finallyBlock = writeTask.close())
+      }
     }
   }
 }

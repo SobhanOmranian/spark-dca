@@ -19,9 +19,7 @@ package org.apache.spark.mllib.pmml.export
 
 import scala.{Array => SArray}
 
-import org.dmg.pmml.{DataDictionary, DataField, DataType, FieldName, MiningField,
-  MiningFunction, MiningSchema, OpType}
-import org.dmg.pmml.regression.{NumericPredictor, RegressionModel, RegressionTable}
+import org.dmg.pmml._
 
 import org.apache.spark.mllib.regression.GeneralizedLinearModel
 
@@ -31,7 +29,7 @@ import org.apache.spark.mllib.regression.GeneralizedLinearModel
 private[mllib] class BinaryClassificationPMMLModelExport(
     model: GeneralizedLinearModel,
     description: String,
-    normalizationMethod: RegressionModel.NormalizationMethod,
+    normalizationMethod: RegressionNormalizationMethodType,
     threshold: Double)
   extends PMMLModelExport {
 
@@ -49,7 +47,7 @@ private[mllib] class BinaryClassificationPMMLModelExport(
        val miningSchema = new MiningSchema
        val regressionTableYES = new RegressionTable(model.intercept).setTargetCategory("1")
        var interceptNO = threshold
-       if (RegressionModel.NormalizationMethod.LOGIT == normalizationMethod) {
+       if (RegressionNormalizationMethodType.LOGIT == normalizationMethod) {
          if (threshold <= 0) {
            interceptNO = Double.MinValue
          } else if (threshold >= 1) {
@@ -60,7 +58,7 @@ private[mllib] class BinaryClassificationPMMLModelExport(
        }
        val regressionTableNO = new RegressionTable(interceptNO).setTargetCategory("0")
        val regressionModel = new RegressionModel()
-         .setMiningFunction(MiningFunction.CLASSIFICATION)
+         .setFunctionName(MiningFunctionType.CLASSIFICATION)
          .setMiningSchema(miningSchema)
          .setModelName(description)
          .setNormalizationMethod(normalizationMethod)
@@ -71,7 +69,7 @@ private[mllib] class BinaryClassificationPMMLModelExport(
          dataDictionary.addDataFields(new DataField(fields(i), OpType.CONTINUOUS, DataType.DOUBLE))
          miningSchema
            .addMiningFields(new MiningField(fields(i))
-           .setUsageType(MiningField.UsageType.ACTIVE))
+           .setUsageType(FieldUsageType.ACTIVE))
          regressionTableYES.addNumericPredictors(new NumericPredictor(fields(i), model.weights(i)))
        }
 
@@ -81,7 +79,7 @@ private[mllib] class BinaryClassificationPMMLModelExport(
          .addDataFields(new DataField(targetField, OpType.CATEGORICAL, DataType.STRING))
        miningSchema
          .addMiningFields(new MiningField(targetField)
-         .setUsageType(MiningField.UsageType.TARGET))
+         .setUsageType(FieldUsageType.TARGET))
 
        dataDictionary.setNumberOfFields(dataDictionary.getDataFields.size)
 

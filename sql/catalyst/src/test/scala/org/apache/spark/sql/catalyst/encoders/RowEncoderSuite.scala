@@ -19,10 +19,9 @@ package org.apache.spark.sql.catalyst.encoders
 
 import scala.util.Random
 
+import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.{RandomDataGenerator, Row}
-import org.apache.spark.sql.catalyst.plans.CodegenInterpretedPlanTest
-import org.apache.spark.sql.catalyst.util.{ArrayData, DateTimeUtils, GenericArrayData}
-import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
 import org.apache.spark.sql.types._
 
 @SQLUserDefinedType(udt = classOf[ExamplePointUDT])
@@ -72,7 +71,7 @@ class ExamplePointUDT extends UserDefinedType[ExamplePoint] {
   private[spark] override def asNullable: ExamplePointUDT = this
 }
 
-class RowEncoderSuite extends CodegenInterpretedPlanTest {
+class RowEncoderSuite extends SparkFunSuite {
 
   private val structOfString = new StructType().add("str", StringType)
   private val structOfUDT = new StructType().add("udt", new ExamplePointUDT, false)
@@ -162,32 +161,6 @@ class RowEncoderSuite extends CodegenInterpretedPlanTest {
     assert(row.toSeq(schema).head == decimal)
   }
 
-  test("SPARK-23179: RowEncoder should respect nullOnOverflow for decimals") {
-    val schema = new StructType().add("decimal", DecimalType.SYSTEM_DEFAULT)
-    testDecimalOverflow(schema, Row(BigDecimal("9" * 100)))
-    testDecimalOverflow(schema, Row(new java.math.BigDecimal("9" * 100)))
-  }
-
-  private def testDecimalOverflow(schema: StructType, row: Row): Unit = {
-    withSQLConf(SQLConf.DECIMAL_OPERATIONS_NULL_ON_OVERFLOW.key -> "false") {
-      val encoder = RowEncoder(schema).resolveAndBind()
-      intercept[Exception] {
-        encoder.toRow(row)
-      } match {
-        case e: ArithmeticException =>
-          assert(e.getMessage.contains("cannot be represented as Decimal"))
-        case e: RuntimeException =>
-          assert(e.getCause.isInstanceOf[ArithmeticException])
-          assert(e.getCause.getMessage.contains("cannot be represented as Decimal"))
-      }
-    }
-
-    withSQLConf(SQLConf.DECIMAL_OPERATIONS_NULL_ON_OVERFLOW.key -> "true") {
-      val encoder = RowEncoder(schema).resolveAndBind()
-      assert(encoder.fromRow(encoder.toRow(row)).get(0) == null)
-    }
-  }
-
   test("RowEncoder should preserve schema nullability") {
     val schema = new StructType().add("int", IntegerType, nullable = false)
     val encoder = RowEncoder(schema).resolveAndBind()
@@ -266,7 +239,7 @@ class RowEncoderSuite extends CodegenInterpretedPlanTest {
     val encoder = RowEncoder(schema)
     val e = intercept[RuntimeException](encoder.toRow(null))
     assert(e.getMessage.contains("Null value appeared in non-nullable field"))
-    assert(e.getMessage.contains("top level Product or row object"))
+    assert(e.getMessage.contains("top level row object"))
   }
 
   test("RowEncoder should validate external type") {
@@ -298,71 +271,6 @@ class RowEncoderSuite extends CodegenInterpretedPlanTest {
       encoder.toRow(Row(Array("a")))
     }
     assert(e4.getMessage.contains("java.lang.String is not a valid external type"))
-  }
-
-  test("SPARK-25791: Datatype of serializers should be accessible") {
-    val udtSQLType = new StructType().add("a", IntegerType)
-    val pythonUDT = new PythonUserDefinedType(udtSQLType, "pyUDT", "serializedPyClass")
-    val schema = new StructType().add("pythonUDT", pythonUDT, true)
-    val encoder = RowEncoder(schema)
-    assert(encoder.serializer(0).dataType == pythonUDT.sqlType)
-  }
-
-  test("encoding/decoding TimestampType to/from java.time.Instant") {
-    withSQLConf(SQLConf.DATETIME_JAVA8API_ENABLED.key -> "true") {
-      val schema = new StructType().add("t", TimestampType)
-      val encoder = RowEncoder(schema).resolveAndBind()
-      val instant = java.time.Instant.parse("2019-02-26T16:56:00Z")
-      val row = encoder.toRow(Row(instant))
-      assert(row.getLong(0) === DateTimeUtils.instantToMicros(instant))
-      val readback = encoder.fromRow(row)
-      assert(readback.get(0) === instant)
-    }
-  }
-
-  test("encoding/decoding DateType to/from java.time.LocalDate") {
-    withSQLConf(SQLConf.DATETIME_JAVA8API_ENABLED.key -> "true") {
-      val schema = new StructType().add("d", DateType)
-      val encoder = RowEncoder(schema).resolveAndBind()
-      val localDate = java.time.LocalDate.parse("2019-02-27")
-      val row = encoder.toRow(Row(localDate))
-      assert(row.getLong(0) === DateTimeUtils.localDateToDays(localDate))
-      val readback = encoder.fromRow(row)
-      assert(readback.get(0).equals(localDate))
-    }
-  }
-
-  for {
-    elementType <- Seq(IntegerType, StringType)
-    containsNull <- Seq(true, false)
-    nullable <- Seq(true, false)
-  } {
-    test("RowEncoder should preserve array nullability: " +
-      s"ArrayType($elementType, containsNull = $containsNull), nullable = $nullable") {
-      val schema = new StructType().add("array", ArrayType(elementType, containsNull), nullable)
-      val encoder = RowEncoder(schema).resolveAndBind()
-      assert(encoder.serializer.length == 1)
-      assert(encoder.serializer.head.dataType == ArrayType(elementType, containsNull))
-      assert(encoder.serializer.head.nullable == nullable)
-    }
-  }
-
-  for {
-    keyType <- Seq(IntegerType, StringType)
-    valueType <- Seq(IntegerType, StringType)
-    valueContainsNull <- Seq(true, false)
-    nullable <- Seq(true, false)
-  } {
-    test("RowEncoder should preserve map nullability: " +
-      s"MapType($keyType, $valueType, valueContainsNull = $valueContainsNull), " +
-      s"nullable = $nullable") {
-      val schema = new StructType().add(
-        "map", MapType(keyType, valueType, valueContainsNull), nullable)
-      val encoder = RowEncoder(schema).resolveAndBind()
-      assert(encoder.serializer.length == 1)
-      assert(encoder.serializer.head.dataType == MapType(keyType, valueType, valueContainsNull))
-      assert(encoder.serializer.head.nullable == nullable)
-    }
   }
 
   private def encodeDecodeTest(schema: StructType): Unit = {

@@ -17,7 +17,6 @@
 
 package org.apache.spark.mllib.regression;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
@@ -56,8 +55,7 @@ public class JavaRidgeRegressionSuite extends SharedSparkSession {
     int numFeatures = 20;
     List<LabeledPoint> data = generateRidgeData(2 * numExamples, numFeatures, 10.0);
 
-    JavaRDD<LabeledPoint> testRDD = jsc.parallelize(
-            new ArrayList<>(data.subList(0, numExamples)));
+    JavaRDD<LabeledPoint> testRDD = jsc.parallelize(data.subList(0, numExamples));
     List<LabeledPoint> validationData = data.subList(numExamples, 2 * numExamples);
 
     RidgeRegressionWithSGD ridgeSGDImpl = new RidgeRegressionWithSGD();
@@ -81,8 +79,7 @@ public class JavaRidgeRegressionSuite extends SharedSparkSession {
     int numFeatures = 20;
     List<LabeledPoint> data = generateRidgeData(2 * numExamples, numFeatures, 10.0);
 
-    JavaRDD<LabeledPoint> testRDD = jsc.parallelize(
-            new ArrayList<>(data.subList(0, numExamples)));
+    JavaRDD<LabeledPoint> testRDD = jsc.parallelize(data.subList(0, numExamples));
     List<LabeledPoint> validationData = data.subList(numExamples, 2 * numExamples);
 
     RidgeRegressionModel model = RidgeRegressionWithSGD.train(testRDD.rdd(), 200, 1.0, 0.0);

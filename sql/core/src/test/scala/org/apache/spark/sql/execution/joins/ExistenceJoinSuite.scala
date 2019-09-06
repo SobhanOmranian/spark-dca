@@ -21,14 +21,14 @@ import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.planning.ExtractEquiJoinKeys
 import org.apache.spark.sql.catalyst.plans._
-import org.apache.spark.sql.catalyst.plans.logical.{Join, JoinHint}
+import org.apache.spark.sql.catalyst.plans.logical.Join
 import org.apache.spark.sql.execution.{FilterExec, ProjectExec, SparkPlan, SparkPlanTest}
 import org.apache.spark.sql.execution.exchange.EnsureRequirements
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 import org.apache.spark.sql.types.{BooleanType, DoubleType, IntegerType, StructType}
 
-class ExistenceJoinSuite extends SparkPlanTest with SharedSparkSession {
+class ExistenceJoinSuite extends SparkPlanTest with SharedSQLContext {
 
   private lazy val left = spark.createDataFrame(
     sparkContext.parallelize(Seq(
@@ -85,8 +85,7 @@ class ExistenceJoinSuite extends SparkPlanTest with SharedSparkSession {
       expectedAnswer: Seq[Row]): Unit = {
 
     def extractJoinParts(): Option[ExtractEquiJoinKeys.ReturnType] = {
-      val join = Join(leftRows.logicalPlan, rightRows.logicalPlan,
-        Inner, Some(condition), JoinHint.NONE)
+      val join = Join(leftRows.logicalPlan, rightRows.logicalPlan, Inner, Some(condition))
       ExtractEquiJoinKeys.unapply(join)
     }
 
@@ -103,7 +102,7 @@ class ExistenceJoinSuite extends SparkPlanTest with SharedSparkSession {
     }
 
     test(s"$testName using ShuffledHashJoin") {
-      extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _, _) =>
+      extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _) =>
         withSQLConf(SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
           checkAnswer2(leftRows, rightRows, (left: SparkPlan, right: SparkPlan) =>
             EnsureRequirements(left.sqlContext.sessionState.conf).apply(
@@ -121,8 +120,8 @@ class ExistenceJoinSuite extends SparkPlanTest with SharedSparkSession {
       }
     }
 
-    testWithWholeStageCodegenOnAndOff(s"$testName using BroadcastHashJoin") { _ =>
-      extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _, _) =>
+    test(s"$testName using BroadcastHashJoin") {
+      extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _) =>
         withSQLConf(SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
           checkAnswer2(leftRows, rightRows, (left: SparkPlan, right: SparkPlan) =>
             EnsureRequirements(left.sqlContext.sessionState.conf).apply(
@@ -141,7 +140,7 @@ class ExistenceJoinSuite extends SparkPlanTest with SharedSparkSession {
     }
 
     test(s"$testName using SortMergeJoin") {
-      extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _, _) =>
+      extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _) =>
         withSQLConf(SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
           checkAnswer2(leftRows, rightRows, (left: SparkPlan, right: SparkPlan) =>
             EnsureRequirements(left.sqlContext.sessionState.conf).apply(

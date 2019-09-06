@@ -22,21 +22,19 @@ import org.json4s.JsonAST.JValue
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 
-import org.apache.spark.annotation.Evolving
+import org.apache.spark.annotation.InterfaceStability
 
 /**
  * Reports information about the instantaneous status of a streaming query.
  *
  * @param message A human readable description of what the stream is currently doing.
- * @param isDataAvailable True when there is new data to be processed. Doesn't apply
- *                        to ContinuousExecution where it is always false.
+ * @param isDataAvailable True when there is new data to be processed.
  * @param isTriggerActive True when the trigger is actively firing, false when waiting for the
- *                        next trigger time. Doesn't apply to ContinuousExecution where it is
- *                        always false.
+ *                        next trigger time.
  *
  * @since 2.1.0
  */
-@Evolving
+@InterfaceStability.Evolving
 class StreamingQueryStatus protected[sql](
     val message: String,
     val isDataAvailable: Boolean,

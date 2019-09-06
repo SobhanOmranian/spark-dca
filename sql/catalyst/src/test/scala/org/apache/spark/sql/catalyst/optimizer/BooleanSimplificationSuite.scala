@@ -36,18 +36,18 @@ class BooleanSimplificationSuite extends PlanTest with ExpressionEvalHelper with
       Batch("AnalysisNodes", Once,
         EliminateSubqueryAliases) ::
       Batch("Constant Folding", FixedPoint(50),
-        NullPropagation,
+        NullPropagation(conf),
         ConstantFolding,
         SimplifyConditionals,
         BooleanSimplification,
-        PruneFilters) :: Nil
+        PruneFilters(conf)) :: Nil
   }
 
   val testRelation = LocalRelation('a.int, 'b.int, 'c.int, 'd.string,
     'e.boolean, 'f.boolean, 'g.boolean, 'h.boolean)
 
   val testRelationWithData = LocalRelation.fromExternalRows(
-    testRelation.output, Seq(Row(1, 2, 3, "abc"))
+    testRelation.output, Seq(Row(1, 2, 3, "abc", true, null, true, null))
   )
 
   val testNotNullableRelation = LocalRelation('a.int.notNull, 'b.int.notNull, 'c.int.notNull,
@@ -55,7 +55,7 @@ class BooleanSimplificationSuite extends PlanTest with ExpressionEvalHelper with
     'h.boolean.notNull)
 
   val testNotNullableRelationWithData = LocalRelation.fromExternalRows(
-    testNotNullableRelation.output, Seq(Row(1, 2, 3, "abc"))
+    testNotNullableRelation.output, Seq(Row(1, 2, 3, "abc", true, false, true, false))
   )
 
   private def checkCondition(input: Expression, expected: LogicalPlan): Unit = {
@@ -179,13 +179,13 @@ class BooleanSimplificationSuite extends PlanTest with ExpressionEvalHelper with
   }
 
   test("DeMorgan's law") {
-    checkCondition(!('e && 'f), !'e || !'f)
+    checkCondition(!('a && 'b), !'a || !'b)
 
-    checkCondition(!('e || 'f), !'e && !'f)
+    checkCondition(!('a || 'b), !'a && !'b)
 
-    checkCondition(!(('e && 'f) || ('g && 'h)), (!'e || !'f) && (!'g || !'h))
+    checkCondition(!(('a && 'b) || ('c && 'd)), (!'a || !'b) && (!'c || !'d))
 
-    checkCondition(!(('e || 'f) && ('g || 'h)), (!'e && !'f) || (!'g && !'h))
+    checkCondition(!(('a || 'b) && ('c || 'd)), (!'a && !'b) || (!'c && !'d))
   }
 
   private val caseInsensitiveConf = new SQLConf().copy(SQLConf.CASE_SENSITIVE -> false)
@@ -240,8 +240,8 @@ class BooleanSimplificationSuite extends PlanTest with ExpressionEvalHelper with
   }
 
   protected def assertEquivalent(e1: Expression, e2: Expression): Unit = {
-    val correctAnswer = Project(Alias(e2, "out")() :: Nil, OneRowRelation()).analyze
-    val actual = Optimize.execute(Project(Alias(e1, "out")() :: Nil, OneRowRelation()).analyze)
+    val correctAnswer = Project(Alias(e2, "out")() :: Nil, OneRowRelation).analyze
+    val actual = Optimize.execute(Project(Alias(e1, "out")() :: Nil, OneRowRelation).analyze)
     comparePlans(actual, correctAnswer)
   }
 
@@ -276,7 +276,7 @@ class BooleanSimplificationSuite extends PlanTest with ExpressionEvalHelper with
         col2NotNULLVal <- binaryBooleanValues;
         (originalExpr, expectedExpr) <- exprs) {
       val inputRow = create_row(col1NotNULLVal, col2NotNULLVal)
-      val optimizedVal = evaluateWithoutCodegen(expectedExpr, inputRow)
+      val optimizedVal = evaluate(expectedExpr, inputRow)
       checkEvaluation(originalExpr, optimizedVal, inputRow)
     }
   }

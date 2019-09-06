@@ -17,13 +17,14 @@
 
 import gc
 import os
+import socket
 import sys
 from tempfile import NamedTemporaryFile
 import threading
 
 from pyspark.cloudpickle import print_exec
 from pyspark.java_gateway import local_connect_and_auth
-from pyspark.serializers import ChunkedStream, pickle_protocol
+from pyspark.serializers import ChunkedStream
 from pyspark.util import _exception_message
 
 if sys.version < '3':
@@ -49,8 +50,8 @@ def _from_id(bid):
 class Broadcast(object):
 
     """
-    A broadcast variable created with :meth:`SparkContext.broadcast`.
-    Access its value through :attr:`value`.
+    A broadcast variable created with L{SparkContext.broadcast()}.
+    Access its value through C{.value}.
 
     Examples:
 
@@ -69,19 +70,18 @@ class Broadcast(object):
     def __init__(self, sc=None, value=None, pickle_registry=None, path=None,
                  sock_file=None):
         """
-        Should not be called directly by users -- use :meth:`SparkContext.broadcast`
+        Should not be called directly by users -- use L{SparkContext.broadcast()}
         instead.
         """
         if sc is not None:
             # we're on the driver.  We want the pickled data to end up in a file (maybe encrypted)
             f = NamedTemporaryFile(delete=False, dir=sc._temp_dir)
             self._path = f.name
-            self._sc = sc
-            self._python_broadcast = sc._jvm.PythonRDD.setupBroadcast(self._path)
+            python_broadcast = sc._jvm.PythonRDD.setupBroadcast(self._path)
             if sc._encryption_enabled:
                 # with encryption, we ask the jvm to do the encryption for us, we send it data
                 # over a socket
-                port, auth_secret = self._python_broadcast.setupEncryptionServer()
+                port, auth_secret = python_broadcast.setupEncryptionServer()
                 (encryption_sock_file, _) = local_connect_and_auth(port, auth_secret)
                 broadcast_out = ChunkedStream(encryption_sock_file, 8192)
             else:
@@ -89,14 +89,12 @@ class Broadcast(object):
                 broadcast_out = f
             self.dump(value, broadcast_out)
             if sc._encryption_enabled:
-                self._python_broadcast.waitTillDataReceived()
-            self._jbroadcast = sc._jsc.broadcast(self._python_broadcast)
+                python_broadcast.waitTillDataReceived()
+            self._jbroadcast = sc._jsc.broadcast(python_broadcast)
             self._pickle_registry = pickle_registry
         else:
             # we're on an executor
             self._jbroadcast = None
-            self._sc = None
-            self._python_broadcast = None
             if sock_file is not None:
                 # the jvm is doing decryption for us.  Read the value
                 # immediately from the sock_file
@@ -109,7 +107,7 @@ class Broadcast(object):
 
     def dump(self, value, f):
         try:
-            pickle.dump(value, f, pickle_protocol)
+            pickle.dump(value, f, 2)
         except pickle.PickleError:
             raise
         except Exception as e:
@@ -136,15 +134,7 @@ class Broadcast(object):
         """ Return the broadcasted value
         """
         if not hasattr(self, "_value") and self._path is not None:
-            # we only need to decrypt it here when encryption is enabled and
-            # if its on the driver, since executor decryption is handled already
-            if self._sc is not None and self._sc._encryption_enabled:
-                port, auth_secret = self._python_broadcast.setupDecryptionServer()
-                (decrypted_sock_file, _) = local_connect_and_auth(port, auth_secret)
-                self._python_broadcast.waitTillBroadcastDataSent()
-                return self.load(decrypted_sock_file)
-            else:
-                self._value = self.load_from_path(self._path)
+            self._value = self.load_from_path(self._path)
         return self._value
 
     def unpersist(self, blocking=False):
@@ -159,19 +149,16 @@ class Broadcast(object):
             raise Exception("Broadcast can only be unpersisted in driver")
         self._jbroadcast.unpersist(blocking)
 
-    def destroy(self, blocking=False):
+    def destroy(self):
         """
         Destroy all data and metadata related to this broadcast variable.
         Use this with caution; once a broadcast variable has been destroyed,
-        it cannot be used again.
-
-        .. versionchanged:: 3.0.0
-           Added optional argument `blocking` to specify whether to block until all
-           blocks are deleted.
+        it cannot be used again. This method blocks until destroy has
+        completed.
         """
         if self._jbroadcast is None:
             raise Exception("Broadcast can only be destroyed in driver")
-        self._jbroadcast.destroy(blocking)
+        self._jbroadcast.destroy()
         os.unlink(self._path)
 
     def __reduce__(self):
@@ -203,4 +190,4 @@ if __name__ == "__main__":
     import doctest
     (failure_count, test_count) = doctest.testmod()
     if failure_count:
-        sys.exit(-1)
+        exit(-1)

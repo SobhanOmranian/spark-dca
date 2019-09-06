@@ -20,40 +20,18 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
 
+import org.apache.spark.memory.MemoryMode;
 import org.apache.spark.sql.types.*;
 import org.apache.spark.unsafe.Platform;
-import org.apache.spark.unsafe.types.UTF8String;
 
 /**
  * A column backed by an in memory JVM array. This stores the NULLs as a byte per value
  * and a java array for the values.
  */
-public final class OnHeapColumnVector extends WritableColumnVector {
+public final class OnHeapColumnVector extends ColumnVector {
 
   private static final boolean bigEndianPlatform =
     ByteOrder.nativeOrder().equals(ByteOrder.BIG_ENDIAN);
-
-  /**
-   * Allocates columns to store elements of each field of the schema on heap.
-   * Capacity is the initial capacity of the vector and it will grow as necessary. Capacity is
-   * in number of elements, not number of bytes.
-   */
-  public static OnHeapColumnVector[] allocateColumns(int capacity, StructType schema) {
-    return allocateColumns(capacity, schema.fields());
-  }
-
-  /**
-   * Allocates columns to store elements of each field on heap.
-   * Capacity is the initial capacity of the vector and it will grow as necessary. Capacity is
-   * in number of elements, not number of bytes.
-   */
-  public static OnHeapColumnVector[] allocateColumns(int capacity, StructField[] fields) {
-    OnHeapColumnVector[] vectors = new OnHeapColumnVector[fields.length];
-    for (int i = 0; i < fields.length; i++) {
-      vectors[i] = new OnHeapColumnVector(capacity, fields[i].dataType());
-    }
-    return vectors;
-  }
 
   // The data stored in these arrays need to maintain binary compatible. We can
   // directly pass this buffer to external components.
@@ -69,15 +47,23 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   private float[] floatData;
   private double[] doubleData;
 
-  // Only set if type is Array or Map.
+  // Only set if type is Array.
   private int[] arrayLengths;
   private int[] arrayOffsets;
 
-  public OnHeapColumnVector(int capacity, DataType type) {
-    super(capacity, type);
-
+  protected OnHeapColumnVector(int capacity, DataType type) {
+    super(capacity, type, MemoryMode.ON_HEAP);
     reserveInternal(capacity);
     reset();
+  }
+
+  @Override
+  public long valuesNativeAddress() {
+    throw new RuntimeException("Cannot get native address for on heap column");
+  }
+  @Override
+  public long nullsNativeAddress() {
+    throw new RuntimeException("Cannot get native address for on heap column");
   }
 
   @Override
@@ -107,6 +93,7 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   public void putNull(int rowId) {
     nulls[rowId] = (byte)1;
     ++numNulls;
+    anyNullsSet = true;
   }
 
   @Override
@@ -114,12 +101,13 @@ public final class OnHeapColumnVector extends WritableColumnVector {
     for (int i = 0; i < count; ++i) {
       nulls[rowId + i] = (byte)1;
     }
+    anyNullsSet = true;
     numNulls += count;
   }
 
   @Override
   public void putNotNulls(int rowId, int count) {
-    if (!hasNull()) return;
+    if (!anyNullsSet) return;
     for (int i = 0; i < count; ++i) {
       nulls[rowId + i] = (byte)0;
     }
@@ -150,16 +138,6 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   @Override
   public boolean getBoolean(int rowId) {
     return byteData[rowId] == 1;
-  }
-
-  @Override
-  public boolean[] getBooleans(int rowId, int count) {
-    assert(dictionary == null);
-    boolean[] array = new boolean[count];
-    for (int i = 0; i < count; ++i) {
-      array[i] = (byteData[rowId + i] == 1);
-    }
-   return array;
   }
 
   //
@@ -194,19 +172,6 @@ public final class OnHeapColumnVector extends WritableColumnVector {
     }
   }
 
-  @Override
-  public byte[] getBytes(int rowId, int count) {
-    assert(dictionary == null);
-    byte[] array = new byte[count];
-    System.arraycopy(byteData, rowId, array, 0, count);
-    return array;
-  }
-
-  @Override
-  protected UTF8String getBytesAsUTF8String(int rowId, int count) {
-    return UTF8String.fromBytes(byteData, rowId, count);
-  }
-
   //
   // APIs dealing with Shorts
   //
@@ -229,26 +194,12 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   }
 
   @Override
-  public void putShorts(int rowId, int count, byte[] src, int srcIndex) {
-    Platform.copyMemory(src, Platform.BYTE_ARRAY_OFFSET + srcIndex, shortData,
-      Platform.SHORT_ARRAY_OFFSET + rowId * 2L, count * 2L);
-  }
-
-  @Override
   public short getShort(int rowId) {
     if (dictionary == null) {
       return shortData[rowId];
     } else {
       return (short) dictionary.decodeToInt(dictionaryIds.getDictId(rowId));
     }
-  }
-
-  @Override
-  public short[] getShorts(int rowId, int count) {
-    assert(dictionary == null);
-    short[] array = new short[count];
-    System.arraycopy(shortData, rowId, array, 0, count);
-    return array;
   }
 
 
@@ -274,12 +225,6 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   }
 
   @Override
-  public void putInts(int rowId, int count, byte[] src, int srcIndex) {
-    Platform.copyMemory(src, Platform.BYTE_ARRAY_OFFSET + srcIndex, intData,
-      Platform.INT_ARRAY_OFFSET + rowId * 4L, count * 4L);
-  }
-
-  @Override
   public void putIntsLittleEndian(int rowId, int count, byte[] src, int srcIndex) {
     int srcOffset = srcIndex + Platform.BYTE_ARRAY_OFFSET;
     for (int i = 0; i < count; ++i, srcOffset += 4) {
@@ -297,14 +242,6 @@ public final class OnHeapColumnVector extends WritableColumnVector {
     } else {
       return dictionary.decodeToInt(dictionaryIds.getDictId(rowId));
     }
-  }
-
-  @Override
-  public int[] getInts(int rowId, int count) {
-    assert(dictionary == null);
-    int[] array = new int[count];
-    System.arraycopy(intData, rowId, array, 0, count);
-    return array;
   }
 
   /**
@@ -340,12 +277,6 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   }
 
   @Override
-  public void putLongs(int rowId, int count, byte[] src, int srcIndex) {
-    Platform.copyMemory(src, Platform.BYTE_ARRAY_OFFSET + srcIndex, longData,
-      Platform.LONG_ARRAY_OFFSET + rowId * 8L, count * 8L);
-  }
-
-  @Override
   public void putLongsLittleEndian(int rowId, int count, byte[] src, int srcIndex) {
     int srcOffset = srcIndex + Platform.BYTE_ARRAY_OFFSET;
     for (int i = 0; i < count; ++i, srcOffset += 8) {
@@ -363,14 +294,6 @@ public final class OnHeapColumnVector extends WritableColumnVector {
     } else {
       return dictionary.decodeToLong(dictionaryIds.getDictId(rowId));
     }
-  }
-
-  @Override
-  public long[] getLongs(int rowId, int count) {
-    assert(dictionary == null);
-    long[] array = new long[count];
-    System.arraycopy(longData, rowId, array, 0, count);
-    return array;
   }
 
   //
@@ -394,9 +317,9 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   public void putFloats(int rowId, int count, byte[] src, int srcIndex) {
     if (!bigEndianPlatform) {
       Platform.copyMemory(src, Platform.BYTE_ARRAY_OFFSET + srcIndex, floatData,
-          Platform.DOUBLE_ARRAY_OFFSET + rowId * 4L, count * 4L);
+          Platform.DOUBLE_ARRAY_OFFSET + rowId * 4, count * 4);
     } else {
-      ByteBuffer bb = ByteBuffer.wrap(src).order(ByteOrder.BIG_ENDIAN);
+      ByteBuffer bb = ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN);
       for (int i = 0; i < count; ++i) {
         floatData[i + rowId] = bb.getFloat(srcIndex + (4 * i));
       }
@@ -410,14 +333,6 @@ public final class OnHeapColumnVector extends WritableColumnVector {
     } else {
       return dictionary.decodeToFloat(dictionaryIds.getDictId(rowId));
     }
-  }
-
-  @Override
-  public float[] getFloats(int rowId, int count) {
-    assert(dictionary == null);
-    float[] array = new float[count];
-    System.arraycopy(floatData, rowId, array, 0, count);
-    return array;
   }
 
   //
@@ -443,9 +358,9 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   public void putDoubles(int rowId, int count, byte[] src, int srcIndex) {
     if (!bigEndianPlatform) {
       Platform.copyMemory(src, Platform.BYTE_ARRAY_OFFSET + srcIndex, doubleData,
-          Platform.DOUBLE_ARRAY_OFFSET + rowId * 8L, count * 8L);
+          Platform.DOUBLE_ARRAY_OFFSET + rowId * 8, count * 8);
     } else {
-      ByteBuffer bb = ByteBuffer.wrap(src).order(ByteOrder.BIG_ENDIAN);
+      ByteBuffer bb = ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN);
       for (int i = 0; i < count; ++i) {
         doubleData[i + rowId] = bb.getDouble(srcIndex + (8 * i));
       }
@@ -459,14 +374,6 @@ public final class OnHeapColumnVector extends WritableColumnVector {
     } else {
       return dictionary.decodeToDouble(dictionaryIds.getDictId(rowId));
     }
-  }
-
-  @Override
-  public double[] getDoubles(int rowId, int count) {
-    assert(dictionary == null);
-    double[] array = new double[count];
-    System.arraycopy(doubleData, rowId, array, 0, count);
-    return array;
   }
 
   //
@@ -488,6 +395,12 @@ public final class OnHeapColumnVector extends WritableColumnVector {
     arrayLengths[rowId] = length;
   }
 
+  @Override
+  public void loadBytes(ColumnVector.Array array) {
+    array.byteArray = byteData;
+    array.byteArrayOffset = array.offset;
+  }
+
   //
   // APIs dealing with Byte Arrays
   //
@@ -503,7 +416,7 @@ public final class OnHeapColumnVector extends WritableColumnVector {
   // Spilt this function out since it is the slow path.
   @Override
   protected void reserveInternal(int newCapacity) {
-    if (isArray() || type instanceof MapType) {
+    if (this.resultArray != null || DecimalType.isByteArrayDecimalType(type)) {
       int[] newLengths = new int[newCapacity];
       int[] newOffsets = new int[newCapacity];
       if (this.arrayLengths != null) {
@@ -556,7 +469,7 @@ public final class OnHeapColumnVector extends WritableColumnVector {
         if (doubleData != null) System.arraycopy(doubleData, 0, newData, 0, capacity);
         doubleData = newData;
       }
-    } else if (childColumns != null) {
+    } else if (resultStruct != null) {
       // Nothing to store.
     } else {
       throw new RuntimeException("Unhandled " + type);
@@ -567,10 +480,5 @@ public final class OnHeapColumnVector extends WritableColumnVector {
     nulls = newNulls;
 
     capacity = newCapacity;
-  }
-
-  @Override
-  protected OnHeapColumnVector reserveNewColumn(int capacity, DataType type) {
-    return new OnHeapColumnVector(capacity, type);
   }
 }

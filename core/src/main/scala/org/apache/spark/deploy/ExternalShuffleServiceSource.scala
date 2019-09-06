@@ -19,19 +19,19 @@ package org.apache.spark.deploy
 
 import javax.annotation.concurrent.ThreadSafe
 
-import com.codahale.metrics.{MetricRegistry, MetricSet}
+import com.codahale.metrics.MetricRegistry
 
 import org.apache.spark.metrics.source.Source
+import org.apache.spark.network.shuffle.ExternalShuffleBlockHandler
 
 /**
  * Provides metrics source for external shuffle service
  */
 @ThreadSafe
-private class ExternalShuffleServiceSource extends Source {
+private class ExternalShuffleServiceSource
+(blockHandler: ExternalShuffleBlockHandler) extends Source {
   override val metricRegistry = new MetricRegistry()
   override val sourceName = "shuffleService"
 
-  def registerMetricSet(metricSet: MetricSet): Unit = {
-    metricRegistry.registerAll(metricSet)
-  }
+  metricRegistry.registerAll(blockHandler.getAllMetrics)
 }

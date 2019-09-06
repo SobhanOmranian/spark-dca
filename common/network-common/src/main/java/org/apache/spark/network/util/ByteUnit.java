@@ -17,12 +17,12 @@
 package org.apache.spark.network.util;
 
 public enum ByteUnit {
-  BYTE(1),
-  KiB(1L << 10),
-  MiB(1L << 20),
-  GiB(1L << 30),
-  TiB(1L << 40),
-  PiB(1L << 50);
+  BYTE (1),
+  KiB (1024L),
+  MiB ((long) Math.pow(1024L, 2L)),
+  GiB ((long) Math.pow(1024L, 3L)),
+  TiB ((long) Math.pow(1024L, 4L)),
+  PiB ((long) Math.pow(1024L, 5L));
 
   ByteUnit(long multiplier) {
     this.multiplier = multiplier;
@@ -50,7 +50,7 @@ public enum ByteUnit {
     }
   }
 
-  public long toBytes(long d) {
+  public double toBytes(long d) {
     if (d < 0) {
       throw new IllegalArgumentException("Negative size value. Size must be positive: " + d);
     }

@@ -20,20 +20,22 @@ package org.apache.spark.sql.types
 import scala.math.Ordering
 import scala.reflect.runtime.universe.typeTag
 
-import org.apache.spark.annotation.Stable
+import org.apache.spark.annotation.InterfaceStability
+import org.apache.spark.sql.catalyst.ScalaReflectionLock
+
 
 /**
  * The data type representing `Boolean` values. Please use the singleton `DataTypes.BooleanType`.
  *
  * @since 1.3.0
  */
-@Stable
+@InterfaceStability.Stable
 class BooleanType private() extends AtomicType {
   // The companion object and this class is separated so the companion object also subclasses
   // this type. Otherwise, the companion object would be of type "BooleanType$" in byte code.
   // Defined with a private constructor so the companion object is the only possible instantiation.
   private[sql] type InternalType = Boolean
-  @transient private[sql] lazy val tag = typeTag[InternalType]
+  @transient private[sql] lazy val tag = ScalaReflectionLock.synchronized { typeTag[InternalType] }
   private[sql] val ordering = implicitly[Ordering[InternalType]]
 
   /**
@@ -47,5 +49,5 @@ class BooleanType private() extends AtomicType {
 /**
  * @since 1.3.0
  */
-@Stable
+@InterfaceStability.Stable
 case object BooleanType extends BooleanType

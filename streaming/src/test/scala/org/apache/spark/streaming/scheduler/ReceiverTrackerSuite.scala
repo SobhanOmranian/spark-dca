@@ -41,7 +41,7 @@ class ReceiverTrackerSuite extends TestSuiteBase {
       try {
         // we wait until the Receiver has registered with the tracker,
         // otherwise our rate update is lost
-        eventually(timeout(5.seconds)) {
+        eventually(timeout(5 seconds)) {
           assert(RateTestReceiver.getActive().nonEmpty)
         }
 
@@ -49,15 +49,13 @@ class ReceiverTrackerSuite extends TestSuiteBase {
         // Verify that the rate of the block generator in the receiver get updated
         val activeReceiver = RateTestReceiver.getActive().get
         tracker.sendRateUpdate(inputDStream.id, newRateLimit)
-        eventually(timeout(5.seconds)) {
+        eventually(timeout(5 seconds)) {
           assert(activeReceiver.getDefaultBlockGeneratorRateLimit() === newRateLimit,
             "default block generator did not receive rate update")
           assert(activeReceiver.getCustomBlockGeneratorRateLimit() === newRateLimit,
             "other block generator did not receive rate update")
         }
       } finally {
-        tracker.stop(false)
-        // Make sure it is idempotent.
         tracker.stop(false)
       }
     }
@@ -76,7 +74,7 @@ class ReceiverTrackerSuite extends TestSuiteBase {
       output.register()
       ssc.start()
       StoppableReceiver.shouldStop = true
-      eventually(timeout(10.seconds), interval(10.milliseconds)) {
+      eventually(timeout(10 seconds), interval(10 millis)) {
         // The receiver is stopped once, so if it's restarted, it should be started twice.
         assert(startTimes === 2)
       }
@@ -98,7 +96,7 @@ class ReceiverTrackerSuite extends TestSuiteBase {
       val output = new TestOutputStream(input)
       output.register()
       ssc.start()
-      eventually(timeout(10.seconds), interval(10.milliseconds)) {
+      eventually(timeout(10 seconds), interval(10 millis)) {
         // If preferredLocations is set correctly, receiverTaskLocality should be PROCESS_LOCAL
         assert(receiverTaskLocality === TaskLocality.PROCESS_LOCAL)
       }

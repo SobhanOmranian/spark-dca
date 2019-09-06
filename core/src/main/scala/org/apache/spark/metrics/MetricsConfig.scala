@@ -26,7 +26,6 @@ import scala.util.matching.Regex
 
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.METRICS_CONF
 import org.apache.spark.util.Utils
 
 private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
@@ -53,7 +52,7 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
     // Add default properties in case there's no properties file
     setDefaultProperties(properties)
 
-    loadPropertiesFromFile(conf.get(METRICS_CONF))
+    loadPropertiesFromFile(conf.getOption("spark.metrics.conf"))
 
     // Also look for the properties in provided Spark configuration
     val prefix = "spark.metrics.conf."

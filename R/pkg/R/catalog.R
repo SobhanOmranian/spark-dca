@@ -17,6 +17,41 @@
 
 # catalog.R: SparkSession catalog functions
 
+#' (Deprecated) Create an external table
+#'
+#' Creates an external table based on the dataset in a data source,
+#' Returns a SparkDataFrame associated with the external table.
+#'
+#' The data source is specified by the \code{source} and a set of options(...).
+#' If \code{source} is not specified, the default data source configured by
+#' "spark.sql.sources.default" will be used.
+#'
+#' @param tableName a name of the table.
+#' @param path the path of files to load.
+#' @param source the name of external data source.
+#' @param schema the schema of the data required for some data sources.
+#' @param ... additional argument(s) passed to the method.
+#' @return A SparkDataFrame.
+#' @rdname createExternalTable-deprecated
+#' @seealso \link{createTable}
+#' @export
+#' @examples
+#'\dontrun{
+#' sparkR.session()
+#' df <- createExternalTable("myjson", path="path/to/json", source="json", schema)
+#' }
+#' @name createExternalTable
+#' @method createExternalTable default
+#' @note createExternalTable since 1.4.0
+createExternalTable.default <- function(tableName, path = NULL, source = NULL, schema = NULL, ...) {
+  .Deprecated("createTable", old = "createExternalTable")
+  createTable(tableName, path, source, schema, ...)
+}
+
+createExternalTable <- function(x, ...) {
+  dispatchFunc("createExternalTable(tableName, path = NULL, source = NULL, ...)", x, ...)
+}
+
 #' Creates a table based on the dataset in a data source
 #'
 #' Creates a table based on the dataset in a data source. Returns a SparkDataFrame associated with
@@ -35,6 +70,8 @@
 #' @param ... additional named parameters as options for the data source.
 #' @return A SparkDataFrame.
 #' @rdname createTable
+#' @seealso \link{createExternalTable}
+#' @export
 #' @examples
 #'\dontrun{
 #' sparkR.session()
@@ -73,6 +110,7 @@ createTable <- function(tableName, path = NULL, source = NULL, schema = NULL, ..
 #'                  identifier is provided, it refers to a table in the current database.
 #' @return SparkDataFrame
 #' @rdname cacheTable
+#' @export
 #' @examples
 #'\dontrun{
 #' sparkR.session()
@@ -82,11 +120,16 @@ createTable <- function(tableName, path = NULL, source = NULL, schema = NULL, ..
 #' cacheTable("table")
 #' }
 #' @name cacheTable
+#' @method cacheTable default
 #' @note cacheTable since 1.4.0
-cacheTable <- function(tableName) {
+cacheTable.default <- function(tableName) {
   sparkSession <- getSparkSession()
   catalog <- callJMethod(sparkSession, "catalog")
   invisible(handledCallJMethod(catalog, "cacheTable", tableName))
+}
+
+cacheTable <- function(x, ...) {
+  dispatchFunc("cacheTable(tableName)", x, ...)
 }
 
 #' Uncache Table
@@ -97,6 +140,7 @@ cacheTable <- function(tableName) {
 #'                  identifier is provided, it refers to a table in the current database.
 #' @return SparkDataFrame
 #' @rdname uncacheTable
+#' @export
 #' @examples
 #'\dontrun{
 #' sparkR.session()
@@ -106,11 +150,16 @@ cacheTable <- function(tableName) {
 #' uncacheTable("table")
 #' }
 #' @name uncacheTable
+#' @method uncacheTable default
 #' @note uncacheTable since 1.4.0
-uncacheTable <- function(tableName) {
+uncacheTable.default <- function(tableName) {
   sparkSession <- getSparkSession()
   catalog <- callJMethod(sparkSession, "catalog")
   invisible(handledCallJMethod(catalog, "uncacheTable", tableName))
+}
+
+uncacheTable <- function(x, ...) {
+  dispatchFunc("uncacheTable(tableName)", x, ...)
 }
 
 #' Clear Cache
@@ -118,16 +167,53 @@ uncacheTable <- function(tableName) {
 #' Removes all cached tables from the in-memory cache.
 #'
 #' @rdname clearCache
+#' @export
 #' @examples
 #' \dontrun{
 #' clearCache()
 #' }
 #' @name clearCache
+#' @method clearCache default
 #' @note clearCache since 1.4.0
-clearCache <- function() {
+clearCache.default <- function() {
   sparkSession <- getSparkSession()
   catalog <- callJMethod(sparkSession, "catalog")
   invisible(callJMethod(catalog, "clearCache"))
+}
+
+clearCache <- function() {
+  dispatchFunc("clearCache()")
+}
+
+#' (Deprecated) Drop Temporary Table
+#'
+#' Drops the temporary table with the given table name in the catalog.
+#' If the table has been cached/persisted before, it's also unpersisted.
+#'
+#' @param tableName The name of the SparkSQL table to be dropped.
+#' @seealso \link{dropTempView}
+#' @rdname dropTempTable-deprecated
+#' @export
+#' @examples
+#' \dontrun{
+#' sparkR.session()
+#' df <- read.df(path, "parquet")
+#' createOrReplaceTempView(df, "table")
+#' dropTempTable("table")
+#' }
+#' @name dropTempTable
+#' @method dropTempTable default
+#' @note dropTempTable since 1.4.0
+dropTempTable.default <- function(tableName) {
+  .Deprecated("dropTempView", old = "dropTempTable")
+  if (class(tableName) != "character") {
+    stop("tableName must be a string.")
+  }
+  dropTempView(tableName)
+}
+
+dropTempTable <- function(x, ...) {
+  dispatchFunc("dropTempView(viewName)", x, ...)
 }
 
 #' Drops the temporary view with the given view name in the catalog.
@@ -139,6 +225,7 @@ clearCache <- function() {
 #' @return TRUE if the view is dropped successfully, FALSE otherwise.
 #' @rdname dropTempView
 #' @name dropTempView
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -164,16 +251,22 @@ dropTempView <- function(viewName) {
 #' @return a SparkDataFrame
 #' @rdname tables
 #' @seealso \link{listTables}
+#' @export
 #' @examples
 #'\dontrun{
 #' sparkR.session()
 #' tables("hive")
 #' }
 #' @name tables
+#' @method tables default
 #' @note tables since 1.4.0
-tables <- function(databaseName = NULL) {
+tables.default <- function(databaseName = NULL) {
   # rename column to match previous output schema
   withColumnRenamed(listTables(databaseName), "name", "tableName")
+}
+
+tables <- function(x, ...) {
+  dispatchFunc("tables(databaseName = NULL)", x, ...)
 }
 
 #' Table Names
@@ -183,19 +276,25 @@ tables <- function(databaseName = NULL) {
 #' @param databaseName (optional) name of the database
 #' @return a list of table names
 #' @rdname tableNames
+#' @export
 #' @examples
 #'\dontrun{
 #' sparkR.session()
 #' tableNames("hive")
 #' }
 #' @name tableNames
+#' @method tableNames default
 #' @note tableNames since 1.4.0
-tableNames <- function(databaseName = NULL) {
+tableNames.default <- function(databaseName = NULL) {
   sparkSession <- getSparkSession()
   callJStatic("org.apache.spark.sql.api.r.SQLUtils",
               "getTableNames",
               sparkSession,
               databaseName)
+}
+
+tableNames <- function(x, ...) {
+  dispatchFunc("tableNames(databaseName = NULL)", x, ...)
 }
 
 #' Returns the current default database
@@ -205,6 +304,7 @@ tableNames <- function(databaseName = NULL) {
 #' @return name of the current default database.
 #' @rdname currentDatabase
 #' @name currentDatabase
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -224,6 +324,7 @@ currentDatabase <- function() {
 #' @param databaseName name of the database
 #' @rdname setCurrentDatabase
 #' @name setCurrentDatabase
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -246,6 +347,7 @@ setCurrentDatabase <- function(databaseName) {
 #' @return a SparkDataFrame of the list of databases.
 #' @rdname listDatabases
 #' @name listDatabases
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -268,6 +370,7 @@ listDatabases <- function() {
 #' @rdname listTables
 #' @name listTables
 #' @seealso \link{tables}
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -300,6 +403,7 @@ listTables <- function(databaseName = NULL) {
 #' @return a SparkDataFrame of the list of column descriptions.
 #' @rdname listColumns
 #' @name listColumns
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -329,6 +433,7 @@ listColumns <- function(tableName, databaseName = NULL) {
 #' @return a SparkDataFrame of the list of function descriptions.
 #' @rdname listFunctions
 #' @name listFunctions
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -358,6 +463,7 @@ listFunctions <- function(databaseName = NULL) {
 #'                  identifier is provided, it refers to a table in the current database.
 #' @rdname recoverPartitions
 #' @name recoverPartitions
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -384,6 +490,7 @@ recoverPartitions <- function(tableName) {
 #'                  identifier is provided, it refers to a table in the current database.
 #' @rdname refreshTable
 #' @name refreshTable
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()
@@ -405,6 +512,7 @@ refreshTable <- function(tableName) {
 #' @param path the path of the data source.
 #' @rdname refreshByPath
 #' @name refreshByPath
+#' @export
 #' @examples
 #' \dontrun{
 #' sparkR.session()

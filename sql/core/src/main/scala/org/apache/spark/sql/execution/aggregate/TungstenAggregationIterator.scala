@@ -19,7 +19,6 @@ package org.apache.spark.sql.execution.aggregate
 
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
-import org.apache.spark.memory.SparkOutOfMemoryError
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
@@ -61,8 +60,6 @@ import org.apache.spark.unsafe.KVIterator
  *  - Part 8: A utility function used to generate a result when there is no
  *            input and there is no grouping expression.
  *
- * @param partIndex
- *   index of the partition
  * @param groupingExpressions
  *   expressions for grouping keys
  * @param aggregateExpressions
@@ -80,7 +77,6 @@ import org.apache.spark.unsafe.KVIterator
  *   the iterator containing input [[UnsafeRow]]s.
  */
 class TungstenAggregationIterator(
-    partIndex: Int,
     groupingExpressions: Seq[NamedExpression],
     aggregateExpressions: Seq[AggregateExpression],
     aggregateAttributes: Seq[Attribute],
@@ -92,10 +88,8 @@ class TungstenAggregationIterator(
     testFallbackStartsAt: Option[(Int, Int)],
     numOutputRows: SQLMetric,
     peakMemory: SQLMetric,
-    spillSize: SQLMetric,
-    avgHashProbe: SQLMetric)
+    spillSize: SQLMetric)
   extends AggregationIterator(
-    partIndex,
     groupingExpressions,
     originalInputAttributes,
     aggregateExpressions,
@@ -168,7 +162,8 @@ class TungstenAggregationIterator(
     StructType.fromAttributes(groupingExpressions.map(_.toAttribute)),
     TaskContext.get(),
     1024 * 16, // initial capacity
-    TaskContext.get().taskMemoryManager().pageSizeBytes
+    TaskContext.get().taskMemoryManager().pageSizeBytes,
+    false // disable tracking of performance metrics
   )
 
   // The function used to read and process input rows. When processing input rows,
@@ -206,9 +201,7 @@ class TungstenAggregationIterator(
           buffer = hashMap.getAggregationBufferFromUnsafeRow(groupingKey)
           if (buffer == null) {
             // failed to allocate the first page
-            // scalastyle:off throwerror
-            throw new SparkOutOfMemoryError("No enough memory for aggregation")
-            // scalastyle:on throwerror
+            throw new OutOfMemoryError("No enough memory for aggregation")
           }
         }
         processRow(buffer, newInput)
@@ -374,22 +367,6 @@ class TungstenAggregationIterator(
     }
   }
 
-  TaskContext.get().addTaskCompletionListener[Unit](_ => {
-    // At the end of the task, update the task's peak memory usage. Since we destroy
-    // the map to create the sorter, their memory usages should not overlap, so it is safe
-    // to just use the max of the two.
-    val mapMemory = hashMap.getPeakMemoryUsedBytes
-    val sorterMemory = Option(externalSorter).map(_.getPeakMemoryUsedBytes).getOrElse(0L)
-    val maxMemory = Math.max(mapMemory, sorterMemory)
-    val metrics = TaskContext.get().taskMetrics()
-    peakMemory.set(maxMemory)
-    spillSize.set(metrics.memoryBytesSpilled - spillSizeBefore)
-    metrics.incPeakExecutionMemory(maxMemory)
-
-    // Updating average hashmap probe
-    avgHashProbe.set(hashMap.getAvgHashProbeBucketListIterations)
-  })
-
   ///////////////////////////////////////////////////////////////////////////
   // Part 7: Iterator's public methods.
   ///////////////////////////////////////////////////////////////////////////
@@ -432,6 +409,18 @@ class TungstenAggregationIterator(
         }
       }
 
+      // If this is the last record, update the task's peak memory usage. Since we destroy
+      // the map to create the sorter, their memory usages should not overlap, so it is safe
+      // to just use the max of the two.
+      if (!hasNext) {
+        val mapMemory = hashMap.getPeakMemoryUsedBytes
+        val sorterMemory = Option(externalSorter).map(_.getPeakMemoryUsedBytes).getOrElse(0L)
+        val maxMemory = Math.max(mapMemory, sorterMemory)
+        val metrics = TaskContext.get().taskMetrics()
+        peakMemory += maxMemory
+        spillSize += metrics.memoryBytesSpilled - spillSizeBefore
+        metrics.incPeakExecutionMemory(maxMemory)
+      }
       numOutputRows += 1
       res
     } else {

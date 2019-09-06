@@ -21,14 +21,14 @@ import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.catalyst.expressions.{And, Expression, LessThan}
 import org.apache.spark.sql.catalyst.planning.ExtractEquiJoinKeys
 import org.apache.spark.sql.catalyst.plans._
-import org.apache.spark.sql.catalyst.plans.logical.{Join, JoinHint}
+import org.apache.spark.sql.catalyst.plans.logical.Join
 import org.apache.spark.sql.execution.{SparkPlan, SparkPlanTest}
 import org.apache.spark.sql.execution.exchange.EnsureRequirements
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 import org.apache.spark.sql.types.{DoubleType, IntegerType, StructType}
 
-class OuterJoinSuite extends SparkPlanTest with SharedSparkSession {
+class OuterJoinSuite extends SparkPlanTest with SharedSQLContext {
 
   private lazy val left = spark.createDataFrame(
     sparkContext.parallelize(Seq(
@@ -72,14 +72,13 @@ class OuterJoinSuite extends SparkPlanTest with SharedSparkSession {
       expectedAnswer: Seq[Product]): Unit = {
 
     def extractJoinParts(): Option[ExtractEquiJoinKeys.ReturnType] = {
-      val join = Join(leftRows.logicalPlan, rightRows.logicalPlan,
-        Inner, Some(condition), JoinHint.NONE)
+      val join = Join(leftRows.logicalPlan, rightRows.logicalPlan, Inner, Some(condition))
       ExtractEquiJoinKeys.unapply(join)
     }
 
     if (joinType != FullOuter) {
       test(s"$testName using ShuffledHashJoin") {
-        extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _, _) =>
+        extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _) =>
           withSQLConf(SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
             val buildSide = if (joinType == LeftOuter) BuildRight else BuildLeft
             checkAnswer2(leftRows, rightRows, (left: SparkPlan, right: SparkPlan) =>
@@ -94,13 +93,13 @@ class OuterJoinSuite extends SparkPlanTest with SharedSparkSession {
     }
 
     if (joinType != FullOuter) {
-      testWithWholeStageCodegenOnAndOff(s"$testName using BroadcastHashJoin") { _ =>
+      test(s"$testName using BroadcastHashJoin") {
         val buildSide = joinType match {
           case LeftOuter => BuildRight
           case RightOuter => BuildLeft
           case _ => fail(s"Unsupported join type $joinType")
         }
-        extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _, _) =>
+        extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _) =>
           withSQLConf(SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
             checkAnswer2(leftRows, rightRows, (left: SparkPlan, right: SparkPlan) =>
               BroadcastHashJoinExec(
@@ -113,7 +112,7 @@ class OuterJoinSuite extends SparkPlanTest with SharedSparkSession {
     }
 
     test(s"$testName using SortMergeJoin") {
-      extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _, _) =>
+      extractJoinParts().foreach { case (_, leftKeys, rightKeys, boundCondition, _, _) =>
         withSQLConf(SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
           checkAnswer2(leftRows, rightRows, (left: SparkPlan, right: SparkPlan) =>
             EnsureRequirements(spark.sessionState.conf).apply(

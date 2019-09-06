@@ -64,7 +64,6 @@ public class TransportClientFactorySuite {
   public void tearDown() {
     JavaUtils.closeQuietly(server1);
     JavaUtils.closeQuietly(server2);
-    JavaUtils.closeQuietly(context);
   }
 
   /**
@@ -81,50 +80,49 @@ public class TransportClientFactorySuite {
     TransportConf conf = new TransportConf("shuffle", new MapConfigProvider(configMap));
 
     RpcHandler rpcHandler = new NoOpRpcHandler();
-    try (TransportContext context = new TransportContext(conf, rpcHandler)) {
-      TransportClientFactory factory = context.createClientFactory();
-      Set<TransportClient> clients = Collections.synchronizedSet(
-              new HashSet<>());
+    TransportContext context = new TransportContext(conf, rpcHandler);
+    TransportClientFactory factory = context.createClientFactory();
+    Set<TransportClient> clients = Collections.synchronizedSet(
+      new HashSet<TransportClient>());
 
-      AtomicInteger failed = new AtomicInteger();
-      Thread[] attempts = new Thread[maxConnections * 10];
+    AtomicInteger failed = new AtomicInteger();
+    Thread[] attempts = new Thread[maxConnections * 10];
 
-      // Launch a bunch of threads to create new clients.
-      for (int i = 0; i < attempts.length; i++) {
-        attempts[i] = new Thread(() -> {
-          try {
-            TransportClient client =
-                factory.createClient(TestUtils.getLocalHost(), server1.getPort());
-            assertTrue(client.isActive());
-            clients.add(client);
-          } catch (IOException e) {
-            failed.incrementAndGet();
-          } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-          }
-        });
-
-        if (concurrent) {
-          attempts[i].start();
-        } else {
-          attempts[i].run();
+    // Launch a bunch of threads to create new clients.
+    for (int i = 0; i < attempts.length; i++) {
+      attempts[i] = new Thread(() -> {
+        try {
+          TransportClient client =
+            factory.createClient(TestUtils.getLocalHost(), server1.getPort());
+          assertTrue(client.isActive());
+          clients.add(client);
+        } catch (IOException e) {
+          failed.incrementAndGet();
+        } catch (InterruptedException e) {
+          throw new RuntimeException(e);
         }
+      });
+
+      if (concurrent) {
+        attempts[i].start();
+      } else {
+        attempts[i].run();
       }
-
-      // Wait until all the threads complete.
-      for (Thread attempt : attempts) {
-        attempt.join();
-      }
-
-      Assert.assertEquals(0, failed.get());
-      Assert.assertTrue(clients.size() <= maxConnections);
-
-      for (TransportClient client : clients) {
-        client.close();
-      }
-
-      factory.close();
     }
+
+    // Wait until all the threads complete.
+    for (Thread attempt : attempts) {
+      attempt.join();
+    }
+
+    Assert.assertEquals(0, failed.get());
+    Assert.assertEquals(clients.size(), maxConnections);
+
+    for (TransportClient client : clients) {
+      client.close();
+    }
+
+    factory.close();
   }
 
   @Test
@@ -206,8 +204,8 @@ public class TransportClientFactorySuite {
         throw new UnsupportedOperationException();
       }
     });
-    try (TransportContext context = new TransportContext(conf, new NoOpRpcHandler(), true);
-         TransportClientFactory factory = context.createClientFactory()) {
+    TransportContext context = new TransportContext(conf, new NoOpRpcHandler(), true);
+    try (TransportClientFactory factory = context.createClientFactory()) {
       TransportClient c1 = factory.createClient(TestUtils.getLocalHost(), server1.getPort());
       assertTrue(c1.isActive());
       long expiredTime = System.currentTimeMillis() + 10000; // 10 seconds

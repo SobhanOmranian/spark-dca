@@ -28,11 +28,12 @@ import org.apache.spark.ml.classification.NaiveBayesSuite._
 import org.apache.spark.ml.feature.LabeledPoint
 import org.apache.spark.ml.linalg._
 import org.apache.spark.ml.param.ParamsSuite
-import org.apache.spark.ml.util.{DefaultReadWriteTest, MLTest, MLTestingUtils}
+import org.apache.spark.ml.util.{DefaultReadWriteTest, MLTestingUtils}
 import org.apache.spark.ml.util.TestingUtils._
+import org.apache.spark.mllib.util.MLlibTestSparkContext
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 
-class NaiveBayesSuite extends MLTest with DefaultReadWriteTest {
+class NaiveBayesSuite extends SparkFunSuite with MLlibTestSparkContext with DefaultReadWriteTest {
 
   import testImplicits._
 
@@ -55,13 +56,13 @@ class NaiveBayesSuite extends MLTest with DefaultReadWriteTest {
     bernoulliDataset = generateNaiveBayesInput(pi, theta, 100, seed, "bernoulli").toDF()
   }
 
-  def validatePrediction(predictionAndLabels: Seq[Row]): Unit = {
-    val numOfErrorPredictions = predictionAndLabels.filter {
+  def validatePrediction(predictionAndLabels: DataFrame): Unit = {
+    val numOfErrorPredictions = predictionAndLabels.collect().count {
       case Row(prediction: Double, label: Double) =>
         prediction != label
-    }.length
+    }
     // At least 80% of the predictions should be on.
-    assert(numOfErrorPredictions < predictionAndLabels.length / 5)
+    assert(numOfErrorPredictions < predictionAndLabels.count() / 5)
   }
 
   def validateModelFit(
@@ -81,7 +82,7 @@ class NaiveBayesSuite extends MLTest with DefaultReadWriteTest {
   }
 
   def expectedBernoulliProbabilities(model: NaiveBayesModel, feature: Vector): Vector = {
-    val negThetaMatrix = model.theta.map(v => math.log1p(-math.exp(v)))
+    val negThetaMatrix = model.theta.map(v => math.log(1.0 - math.exp(v)))
     val negFeature = Vectors.dense(feature.toArray.map(v => 1.0 - v))
     val piTheta: BV[Double] = model.pi.asBreeze + model.theta.multiply(feature).asBreeze
     val logClassProbs: BV[Double] = piTheta + negThetaMatrix.multiply(negFeature).asBreeze
@@ -91,10 +92,10 @@ class NaiveBayesSuite extends MLTest with DefaultReadWriteTest {
   }
 
   def validateProbabilities(
-      featureAndProbabilities: Seq[Row],
+      featureAndProbabilities: DataFrame,
       model: NaiveBayesModel,
       modelType: String): Unit = {
-    featureAndProbabilities.foreach {
+    featureAndProbabilities.collect().foreach {
       case Row(features: Vector, probability: Vector) =>
         assert(probability.toArray.sum ~== 1.0 relTol 1.0e-10)
         val expected = modelType match {
@@ -103,7 +104,7 @@ class NaiveBayesSuite extends MLTest with DefaultReadWriteTest {
           case Bernoulli =>
             expectedBernoulliProbabilities(model, features)
           case _ =>
-            throw new IllegalArgumentException(s"Invalid modelType: $modelType.")
+            throw new UnknownError(s"Invalid modelType: $modelType.")
         }
         assert(probability ~== expected relTol 1.0e-10)
     }
@@ -153,40 +154,12 @@ class NaiveBayesSuite extends MLTest with DefaultReadWriteTest {
     val validationDataset =
       generateNaiveBayesInput(piArray, thetaArray, nPoints, 17, "multinomial").toDF()
 
-    testTransformerByGlobalCheckFunc[(Double, Vector)](validationDataset, model,
-      "prediction", "label") { predictionAndLabels: Seq[Row] =>
-      validatePrediction(predictionAndLabels)
-    }
+    val predictionAndLabels = model.transform(validationDataset).select("prediction", "label")
+    validatePrediction(predictionAndLabels)
 
-    testTransformerByGlobalCheckFunc[(Double, Vector)](validationDataset, model,
-      "features", "probability") { featureAndProbabilities: Seq[Row] =>
-      validateProbabilities(featureAndProbabilities, model, "multinomial")
-    }
-
-    ProbabilisticClassifierSuite.testPredictMethods[
-      Vector, NaiveBayesModel](this, model, testDataset)
-  }
-
-  test("prediction on single instance") {
-    val nPoints = 1000
-    val piArray = Array(0.5, 0.1, 0.4).map(math.log)
-    val thetaArray = Array(
-      Array(0.70, 0.10, 0.10, 0.10), // label 0
-      Array(0.10, 0.70, 0.10, 0.10), // label 1
-      Array(0.10, 0.10, 0.70, 0.10)  // label 2
-    ).map(_.map(math.log))
-    val pi = Vectors.dense(piArray)
-    val theta = new DenseMatrix(3, 4, thetaArray.flatten, true)
-
-    val trainDataset =
-      generateNaiveBayesInput(piArray, thetaArray, nPoints, seed, "multinomial").toDF()
-    val nb = new NaiveBayes().setSmoothing(1.0).setModelType("multinomial")
-    val model = nb.fit(trainDataset)
-
-    val validationDataset =
-      generateNaiveBayesInput(piArray, thetaArray, nPoints, 17, "multinomial").toDF()
-
-    testPredictionModelSinglePrediction(model, validationDataset)
+    val featureAndProbabilities = model.transform(validationDataset)
+      .select("features", "probability")
+    validateProbabilities(featureAndProbabilities, model, "multinomial")
   }
 
   test("Naive Bayes with weighted samples") {
@@ -234,18 +207,12 @@ class NaiveBayesSuite extends MLTest with DefaultReadWriteTest {
     val validationDataset =
       generateNaiveBayesInput(piArray, thetaArray, nPoints, 20, "bernoulli").toDF()
 
-    testTransformerByGlobalCheckFunc[(Double, Vector)](validationDataset, model,
-      "prediction", "label") { predictionAndLabels: Seq[Row] =>
-      validatePrediction(predictionAndLabels)
-    }
+    val predictionAndLabels = model.transform(validationDataset).select("prediction", "label")
+    validatePrediction(predictionAndLabels)
 
-    testTransformerByGlobalCheckFunc[(Double, Vector)](validationDataset, model,
-      "features", "probability") { featureAndProbabilities: Seq[Row] =>
-      validateProbabilities(featureAndProbabilities, model, "bernoulli")
-    }
-
-    ProbabilisticClassifierSuite.testPredictMethods[
-      Vector, NaiveBayesModel](this, model, testDataset)
+    val featureAndProbabilities = model.transform(validationDataset)
+      .select("features", "probability")
+    validateProbabilities(featureAndProbabilities, model, "bernoulli")
   }
 
   test("detect negative values") {
@@ -378,7 +345,7 @@ object NaiveBayesSuite {
           counts.toArray.sortBy(_._1).map(_._2)
         case _ =>
           // This should never happen.
-          throw new IllegalArgumentException(s"Invalid modelType: $modelType.")
+          throw new UnknownError(s"Invalid modelType: $modelType.")
       }
 
       LabeledPoint(y, Vectors.dense(xi))

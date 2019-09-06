@@ -18,12 +18,13 @@
 package org.apache.spark.sql.catalyst.plans
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Literal, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.types.IntegerType
 
 /**
- * This suite is used to test [[LogicalPlan]]'s `transformUp/transformDown`.
+ * This suite is used to test [[LogicalPlan]]'s `resolveOperators` and make sure it can correctly
+ * skips sub-trees that have already been marked as analyzed.
  */
 class LogicalPlanSuite extends SparkFunSuite {
   private var invocationCount = 0
@@ -35,62 +36,57 @@ class LogicalPlanSuite extends SparkFunSuite {
 
   private val testRelation = LocalRelation()
 
-  test("transformUp runs on operators") {
+  test("resolveOperator runs on operators") {
     invocationCount = 0
     val plan = Project(Nil, testRelation)
-    plan transformUp function
+    plan resolveOperators function
 
-    assert(invocationCount === 1)
-
-    invocationCount = 0
-    plan transformDown function
     assert(invocationCount === 1)
   }
 
-  test("transformUp runs on operators recursively") {
+  test("resolveOperator runs on operators recursively") {
     invocationCount = 0
     val plan = Project(Nil, Project(Nil, testRelation))
-    plan transformUp function
+    plan resolveOperators function
 
     assert(invocationCount === 2)
+  }
 
+  test("resolveOperator skips all ready resolved plans") {
     invocationCount = 0
-    plan transformDown function
-    assert(invocationCount === 2)
+    val plan = Project(Nil, Project(Nil, testRelation))
+    plan.foreach(_.setAnalyzed())
+    plan resolveOperators function
+
+    assert(invocationCount === 0)
+  }
+
+  test("resolveOperator skips partially resolved plans") {
+    invocationCount = 0
+    val plan1 = Project(Nil, testRelation)
+    val plan2 = Project(Nil, plan1)
+    plan1.foreach(_.setAnalyzed())
+    plan2 resolveOperators function
+
+    assert(invocationCount === 1)
   }
 
   test("isStreaming") {
     val relation = LocalRelation(AttributeReference("a", IntegerType, nullable = true)())
-    val incrementalRelation = LocalRelation(
-      Seq(AttributeReference("a", IntegerType, nullable = true)()), isStreaming = true)
+    val incrementalRelation = new LocalRelation(
+      Seq(AttributeReference("a", IntegerType, nullable = true)())) {
+      override def isStreaming(): Boolean = true
+    }
 
     case class TestBinaryRelation(left: LogicalPlan, right: LogicalPlan) extends BinaryNode {
       override def output: Seq[Attribute] = left.output ++ right.output
     }
 
     require(relation.isStreaming === false)
-    require(incrementalRelation.isStreaming)
+    require(incrementalRelation.isStreaming === true)
     assert(TestBinaryRelation(relation, relation).isStreaming === false)
-    assert(TestBinaryRelation(incrementalRelation, relation).isStreaming)
-    assert(TestBinaryRelation(relation, incrementalRelation).isStreaming)
+    assert(TestBinaryRelation(incrementalRelation, relation).isStreaming === true)
+    assert(TestBinaryRelation(relation, incrementalRelation).isStreaming === true)
     assert(TestBinaryRelation(incrementalRelation, incrementalRelation).isStreaming)
-  }
-
-  test("transformExpressions works with a Stream") {
-    val id1 = NamedExpression.newExprId
-    val id2 = NamedExpression.newExprId
-    val plan = Project(Stream(
-      Alias(Literal(1), "a")(exprId = id1),
-      Alias(Literal(2), "b")(exprId = id2)),
-      OneRowRelation())
-    val result = plan.transformExpressions {
-      case Literal(v: Int, IntegerType) if v != 1 =>
-        Literal(v + 1, IntegerType)
-    }
-    val expected = Project(Stream(
-      Alias(Literal(1), "a")(exprId = id1),
-      Alias(Literal(3), "b")(exprId = id2)),
-      OneRowRelation())
-    assert(result.sameResult(expected))
   }
 }

@@ -24,12 +24,10 @@ import scala.util.Random
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.ml.classification.DecisionTreeClassificationModel
-import org.apache.spark.ml.feature.Instance
-import org.apache.spark.ml.impl.Utils
+import org.apache.spark.ml.feature.LabeledPoint
 import org.apache.spark.ml.regression.DecisionTreeRegressionModel
 import org.apache.spark.ml.tree._
 import org.apache.spark.ml.util.Instrumentation
-import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.tree.configuration.{Algo => OldAlgo, Strategy => OldStrategy}
 import org.apache.spark.mllib.tree.impurity.ImpurityCalculator
 import org.apache.spark.mllib.tree.model.ImpurityStats
@@ -79,7 +77,7 @@ import org.apache.spark.util.random.{SamplingUtils, XORShiftRandom}
  * the heaviest part of the computation.  In general, this implementation is bound by either
  * the cost of statistics computation on workers or by communicating the sufficient statistics.
  */
-private[spark] object RandomForest extends Logging with Serializable {
+private[spark] object RandomForest extends Logging {
 
   /**
    * Train a random forest.
@@ -92,27 +90,8 @@ private[spark] object RandomForest extends Logging with Serializable {
       strategy: OldStrategy,
       numTrees: Int,
       featureSubsetStrategy: String,
-      seed: Long): Array[DecisionTreeModel] = {
-    val instances = input.map { case LabeledPoint(label, features) =>
-      Instance(label, 1.0, features.asML)
-    }
-    run(instances, strategy, numTrees, featureSubsetStrategy, seed, None)
-  }
-
-  /**
-   * Train a random forest.
-   *
-   * @param input Training data: RDD of `Instance`
-   * @return an unweighted set of trees
-   */
-  def run(
-      input: RDD[Instance],
-      strategy: OldStrategy,
-      numTrees: Int,
-      featureSubsetStrategy: String,
       seed: Long,
-      instr: Option[Instrumentation],
-      prune: Boolean = true, // exposed for testing only, real trees are always pruned
+      instr: Option[Instrumentation[_]],
       parentUID: Option[String] = None): Array[DecisionTreeModel] = {
 
     val timer = new TimeTracker()
@@ -121,19 +100,16 @@ private[spark] object RandomForest extends Logging with Serializable {
 
     timer.start("init")
 
-    val retaggedInput = input.retag(classOf[Instance])
+    val retaggedInput = input.retag(classOf[LabeledPoint])
     val metadata =
       DecisionTreeMetadata.buildMetadata(retaggedInput, strategy, numTrees, featureSubsetStrategy)
-
     instr match {
       case Some(instrumentation) =>
         instrumentation.logNumFeatures(metadata.numFeatures)
         instrumentation.logNumClasses(metadata.numClasses)
-        instrumentation.logNumExamples(metadata.numExamples)
       case None =>
         logInfo("numFeatures: " + metadata.numFeatures)
         logInfo("numClasses: " + metadata.numClasses)
-        logInfo("numExamples: " + metadata.numExamples)
     }
 
     // Find the splits and the corresponding bins (interval between the splits) using a sample
@@ -153,8 +129,7 @@ private[spark] object RandomForest extends Logging with Serializable {
     val withReplacement = numTrees > 1
 
     val baggedInput = BaggedPoint
-      .convertToBaggedRDD(treeInput, strategy.subsamplingRate, numTrees, withReplacement,
-        (tp: TreePoint) => tp.weight, seed = seed)
+      .convertToBaggedRDD(treeInput, strategy.subsamplingRate, numTrees, withReplacement, seed)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
     // depth of the decision tree
@@ -194,16 +169,14 @@ private[spark] object RandomForest extends Logging with Serializable {
       training the same tree in the next iteration.  This focus allows us to send fewer trees to
       workers on each iteration; see topNodesForGroup below.
      */
-    val nodeStack = new mutable.ListBuffer[(Int, LearningNode)]
+    val nodeStack = new mutable.Stack[(Int, LearningNode)]
 
     val rng = new Random()
     rng.setSeed(seed)
 
     // Allocate and queue root nodes.
     val topNodes = Array.fill[LearningNode](numTrees)(LearningNode.emptyNode(nodeIndex = 1))
-    for (treeIndex <- 0 until numTrees) {
-      nodeStack.prepend((treeIndex, topNodes(treeIndex)))
-    }
+    Range(0, numTrees).foreach(treeIndex => nodeStack.push((treeIndex, topNodes(treeIndex))))
 
     timer.stop("init")
 
@@ -250,23 +223,22 @@ private[spark] object RandomForest extends Logging with Serializable {
       case Some(uid) =>
         if (strategy.algo == OldAlgo.Classification) {
           topNodes.map { rootNode =>
-            new DecisionTreeClassificationModel(uid, rootNode.toNode(prune), numFeatures,
+            new DecisionTreeClassificationModel(uid, rootNode.toNode, numFeatures,
               strategy.getNumClasses)
           }
         } else {
           topNodes.map { rootNode =>
-            new DecisionTreeRegressionModel(uid, rootNode.toNode(prune), numFeatures)
+            new DecisionTreeRegressionModel(uid, rootNode.toNode, numFeatures)
           }
         }
       case None =>
         if (strategy.algo == OldAlgo.Classification) {
           topNodes.map { rootNode =>
-            new DecisionTreeClassificationModel(rootNode.toNode(prune), numFeatures,
+            new DecisionTreeClassificationModel(rootNode.toNode, numFeatures,
               strategy.getNumClasses)
           }
         } else {
-          topNodes.map(rootNode =>
-            new DecisionTreeRegressionModel(rootNode.toNode(prune), numFeatures))
+          topNodes.map(rootNode => new DecisionTreeRegressionModel(rootNode.toNode, numFeatures))
         }
     }
   }
@@ -278,21 +250,19 @@ private[spark] object RandomForest extends Logging with Serializable {
    * For unordered features, bins correspond to subsets of categories; either the left or right bin
    * for each subset is updated.
    *
-   * @param agg Array storing aggregate calculation, with a set of sufficient statistics for
-   *            each (feature, bin).
-   * @param treePoint Data point being aggregated.
-   * @param splits Possible splits indexed (numFeatures)(numSplits)
-   * @param unorderedFeatures Set of indices of unordered features.
-   * @param numSamples Number of times this instance occurs in the sample.
-   * @param sampleWeight Weight (importance) of instance in dataset.
+   * @param agg  Array storing aggregate calculation, with a set of sufficient statistics for
+   *             each (feature, bin).
+   * @param treePoint  Data point being aggregated.
+   * @param splits possible splits indexed (numFeatures)(numSplits)
+   * @param unorderedFeatures  Set of indices of unordered features.
+   * @param instanceWeight  Weight (importance) of instance in dataset.
    */
   private def mixedBinSeqOp(
       agg: DTStatsAggregator,
       treePoint: TreePoint,
       splits: Array[Array[Split]],
       unorderedFeatures: Set[Int],
-      numSamples: Int,
-      sampleWeight: Double,
+      instanceWeight: Double,
       featuresForNode: Option[Array[Int]]): Unit = {
     val numFeaturesPerNode = if (featuresForNode.nonEmpty) {
       // Use subsampled features
@@ -319,15 +289,14 @@ private[spark] object RandomForest extends Logging with Serializable {
         var splitIndex = 0
         while (splitIndex < numSplits) {
           if (featureSplits(splitIndex).shouldGoLeft(featureValue, featureSplits)) {
-            agg.featureUpdate(leftNodeFeatureOffset, splitIndex, treePoint.label, numSamples,
-              sampleWeight)
+            agg.featureUpdate(leftNodeFeatureOffset, splitIndex, treePoint.label, instanceWeight)
           }
           splitIndex += 1
         }
       } else {
         // Ordered feature
         val binIndex = treePoint.binnedFeatures(featureIndex)
-        agg.update(featureIndexIdx, binIndex, treePoint.label, numSamples, sampleWeight)
+        agg.update(featureIndexIdx, binIndex, treePoint.label, instanceWeight)
       }
       featureIndexIdx += 1
     }
@@ -341,14 +310,12 @@ private[spark] object RandomForest extends Logging with Serializable {
    * @param agg  Array storing aggregate calculation, with a set of sufficient statistics for
    *             each (feature, bin).
    * @param treePoint  Data point being aggregated.
-   * @param numSamples Number of times this instance occurs in the sample.
-   * @param sampleWeight  Weight (importance) of instance in dataset.
+   * @param instanceWeight  Weight (importance) of instance in dataset.
    */
   private def orderedBinSeqOp(
       agg: DTStatsAggregator,
       treePoint: TreePoint,
-      numSamples: Int,
-      sampleWeight: Double,
+      instanceWeight: Double,
       featuresForNode: Option[Array[Int]]): Unit = {
     val label = treePoint.label
 
@@ -358,7 +325,7 @@ private[spark] object RandomForest extends Logging with Serializable {
       var featureIndexIdx = 0
       while (featureIndexIdx < featuresForNode.get.length) {
         val binIndex = treePoint.binnedFeatures(featuresForNode.get.apply(featureIndexIdx))
-        agg.update(featureIndexIdx, binIndex, label, numSamples, sampleWeight)
+        agg.update(featureIndexIdx, binIndex, label, instanceWeight)
         featureIndexIdx += 1
       }
     } else {
@@ -367,7 +334,7 @@ private[spark] object RandomForest extends Logging with Serializable {
       var featureIndex = 0
       while (featureIndex < numFeatures) {
         val binIndex = treePoint.binnedFeatures(featureIndex)
-        agg.update(featureIndex, binIndex, label, numSamples, sampleWeight)
+        agg.update(featureIndex, binIndex, label, instanceWeight)
         featureIndex += 1
       }
     }
@@ -400,7 +367,7 @@ private[spark] object RandomForest extends Logging with Serializable {
       nodesForGroup: Map[Int, Array[LearningNode]],
       treeToNodeToIndexInfo: Map[Int, Map[Int, NodeIndexInfo]],
       splits: Array[Array[Split]],
-      nodeStack: mutable.ListBuffer[(Int, LearningNode)],
+      nodeStack: mutable.Stack[(Int, LearningNode)],
       timer: TimeTracker = new TimeTracker,
       nodeIdCache: Option[NodeIdCache] = None): Unit = {
 
@@ -436,7 +403,7 @@ private[spark] object RandomForest extends Logging with Serializable {
       metadata.isMulticlassWithCategoricalFeatures)
     logDebug("using nodeIdCache = " + nodeIdCache.nonEmpty.toString)
 
-    /*
+    /**
      * Performs a sequential aggregation over a partition for a particular tree and node.
      *
      * For each feature, the aggregate sufficient statistics are updated for the relevant
@@ -456,20 +423,18 @@ private[spark] object RandomForest extends Logging with Serializable {
       if (nodeInfo != null) {
         val aggNodeIndex = nodeInfo.nodeIndexInGroup
         val featuresForNode = nodeInfo.featureSubset
-        val numSamples = baggedPoint.subsampleCounts(treeIndex)
-        val sampleWeight = baggedPoint.sampleWeight
+        val instanceWeight = baggedPoint.subsampleWeights(treeIndex)
         if (metadata.unorderedFeatures.isEmpty) {
-          orderedBinSeqOp(agg(aggNodeIndex), baggedPoint.datum, numSamples, sampleWeight,
-            featuresForNode)
+          orderedBinSeqOp(agg(aggNodeIndex), baggedPoint.datum, instanceWeight, featuresForNode)
         } else {
           mixedBinSeqOp(agg(aggNodeIndex), baggedPoint.datum, splits,
-            metadata.unorderedFeatures, numSamples, sampleWeight, featuresForNode)
+            metadata.unorderedFeatures, instanceWeight, featuresForNode)
         }
-        agg(aggNodeIndex).updateParent(baggedPoint.datum.label, numSamples, sampleWeight)
+        agg(aggNodeIndex).updateParent(baggedPoint.datum.label, instanceWeight)
       }
     }
 
-    /*
+    /**
      * Performs a sequential aggregation over a partition.
      *
      * Each data point contributes to one node. For each feature,
@@ -625,8 +590,8 @@ private[spark] object RandomForest extends Logging with Serializable {
         if (!isLeaf) {
           node.split = Some(split)
           val childIsLeaf = (LearningNode.indexToLevel(nodeIndex) + 1) == metadata.maxDepth
-          val leftChildIsLeaf = childIsLeaf || (math.abs(stats.leftImpurity) < Utils.EPSILON)
-          val rightChildIsLeaf = childIsLeaf || (math.abs(stats.rightImpurity) < Utils.EPSILON)
+          val leftChildIsLeaf = childIsLeaf || (stats.leftImpurity == 0.0)
+          val rightChildIsLeaf = childIsLeaf || (stats.rightImpurity == 0.0)
           node.leftChild = Some(LearningNode(LearningNode.leftChildIndex(nodeIndex),
             leftChildIsLeaf, ImpurityStats.getEmptyImpurityStats(stats.leftImpurityCalculator)))
           node.rightChild = Some(LearningNode(LearningNode.rightChildIndex(nodeIndex),
@@ -641,10 +606,10 @@ private[spark] object RandomForest extends Logging with Serializable {
 
           // enqueue left child and right child if they are not leaves
           if (!leftChildIsLeaf) {
-            nodeStack.prepend((treeIndex, node.leftChild.get))
+            nodeStack.push((treeIndex, node.leftChild.get))
           }
           if (!rightChildIsLeaf) {
-            nodeStack.prepend((treeIndex, node.rightChild.get))
+            nodeStack.push((treeIndex, node.rightChild.get))
           }
 
           logDebug("leftChildIndex = " + node.leftChild.get.id +
@@ -690,20 +655,15 @@ private[spark] object RandomForest extends Logging with Serializable {
       stats.impurity
     }
 
-    val leftRawCount = leftImpurityCalculator.rawCount
-    val rightRawCount = rightImpurityCalculator.rawCount
     val leftCount = leftImpurityCalculator.count
     val rightCount = rightImpurityCalculator.count
 
     val totalCount = leftCount + rightCount
 
-    val violatesMinInstancesPerNode = (leftRawCount < metadata.minInstancesPerNode) ||
-      (rightRawCount < metadata.minInstancesPerNode)
-    val violatesMinWeightPerNode = (leftCount < metadata.minWeightPerNode) ||
-      (rightCount < metadata.minWeightPerNode)
-    // If left child or right child doesn't satisfy minimum weight per node or minimum
-    // instances per node, then this split is invalid, return invalid information gain stats.
-    if (violatesMinInstancesPerNode || violatesMinWeightPerNode) {
+    // If left child or right child doesn't satisfy minimum instances per node,
+    // then this split is invalid, return invalid information gain stats.
+    if ((leftCount < metadata.minInstancesPerNode) ||
+      (rightCount < metadata.minInstancesPerNode)) {
       return ImpurityStats.getInvalidImpurityStats(parentImpurityCalculator)
     }
 
@@ -770,8 +730,7 @@ private[spark] object RandomForest extends Logging with Serializable {
           // Find best split.
           val (bestFeatureSplitIndex, bestFeatureGainStats) =
             Range(0, numSplits).map { case splitIdx =>
-              val leftChildStats =
-                binAggregates.getImpurityCalculator(nodeFeatureOffset, splitIdx)
+              val leftChildStats = binAggregates.getImpurityCalculator(nodeFeatureOffset, splitIdx)
               val rightChildStats =
                 binAggregates.getImpurityCalculator(nodeFeatureOffset, numSplits)
               rightChildStats.subtract(leftChildStats)
@@ -913,14 +872,14 @@ private[spark] object RandomForest extends Logging with Serializable {
    *       and for multiclass classification with a high-arity feature,
    *       there is one bin per category.
    *
-   * @param input Training data: RDD of [[Instance]]
+   * @param input Training data: RDD of [[LabeledPoint]]
    * @param metadata Learning and dataset metadata
    * @param seed random seed
    * @return Splits, an Array of [[Split]]
    *          of size (numFeatures, numSplits)
    */
   protected[tree] def findSplits(
-      input: RDD[Instance],
+      input: RDD[LabeledPoint],
       metadata: DecisionTreeMetadata,
       seed: Long): Array[Array[Split]] = {
 
@@ -931,18 +890,24 @@ private[spark] object RandomForest extends Logging with Serializable {
     // Sample the input only if there are continuous features.
     val continuousFeatures = Range(0, numFeatures).filter(metadata.isContinuous)
     val sampledInput = if (continuousFeatures.nonEmpty) {
-      val fraction = samplesFractionForFindSplits(metadata)
+      // Calculate the number of samples for approximate quantile calculation.
+      val requiredSamples = math.max(metadata.maxBins * metadata.maxBins, 10000)
+      val fraction = if (requiredSamples < metadata.numExamples) {
+        requiredSamples.toDouble / metadata.numExamples
+      } else {
+        1.0
+      }
       logDebug("fraction of data used for calculating quantiles = " + fraction)
       input.sample(withReplacement = false, fraction, new XORShiftRandom(seed).nextInt())
     } else {
-      input.sparkContext.emptyRDD[Instance]
+      input.sparkContext.emptyRDD[LabeledPoint]
     }
 
     findSplitsBySorting(sampledInput, metadata, continuousFeatures)
   }
 
   private def findSplitsBySorting(
-      input: RDD[Instance],
+      input: RDD[LabeledPoint],
       metadata: DecisionTreeMetadata,
       continuousFeatures: IndexedSeq[Int]): Array[Array[Split]] = {
 
@@ -953,10 +918,8 @@ private[spark] object RandomForest extends Logging with Serializable {
       val numPartitions = math.min(continuousFeatures.length, input.partitions.length)
 
       input
-        .flatMap { point =>
-          continuousFeatures.map(idx => (idx, (point.weight, point.features(idx))))
-            .filter(_._2._2 != 0.0)
-        }.groupByKey(numPartitions)
+        .flatMap(point => continuousFeatures.map(idx => (idx, point.features(idx))))
+        .groupByKey(numPartitions)
         .map { case (idx, samples) =>
           val thresholds = findSplitsForContinuousFeature(samples, metadata, idx)
           val splits: Array[Split] = thresholds.map(thresh => new ContinuousSplit(idx, thresh))
@@ -968,8 +931,7 @@ private[spark] object RandomForest extends Logging with Serializable {
     val numFeatures = metadata.numFeatures
     val splits: Array[Array[Split]] = Array.tabulate(numFeatures) {
       case i if metadata.isContinuous(i) =>
-        // some features may contain only zero, so continuousSplits will not have a record
-        val split = continuousSplits.getOrElse(i, Array.empty[Split])
+        val split = continuousSplits(i)
         metadata.setNumSplits(i, split.length)
         split
 
@@ -1020,7 +982,7 @@ private[spark] object RandomForest extends Logging with Serializable {
    *       could be different from the specified `numSplits`.
    *       The `numSplits` attribute in the `DecisionTreeMetadata` class will be set accordingly.
    *
-   * @param featureSamples feature values and sample weights of each sample
+   * @param featureSamples feature values of each sample
    * @param metadata decision tree metadata
    *                 NOTE: `metadata.numbins` will be changed accordingly
    *                       if there are not enough splits to be found
@@ -1028,56 +990,32 @@ private[spark] object RandomForest extends Logging with Serializable {
    * @return array of split thresholds
    */
   private[tree] def findSplitsForContinuousFeature(
-      featureSamples: Iterable[(Double, Double)],
+      featureSamples: Iterable[Double],
       metadata: DecisionTreeMetadata,
       featureIndex: Int): Array[Double] = {
     require(metadata.isContinuous(featureIndex),
       "findSplitsForContinuousFeature can only be used to find splits for a continuous feature.")
 
-    val splits: Array[Double] = if (featureSamples.isEmpty) {
+    val splits = if (featureSamples.isEmpty) {
       Array.empty[Double]
     } else {
       val numSplits = metadata.numSplits(featureIndex)
 
-      // get count for each distinct value except zero value
-      val partValueCountMap = mutable.Map[Double, Double]()
-      var partNumSamples = 0.0
-      var unweightedNumSamples = 0.0
-      featureSamples.foreach { case (sampleWeight, feature) =>
-        partValueCountMap(feature) = partValueCountMap.getOrElse(feature, 0.0) + sampleWeight
-        partNumSamples += sampleWeight
-        unweightedNumSamples += 1.0
+      // get count for each distinct value
+      val (valueCountMap, numSamples) = featureSamples.foldLeft((Map.empty[Double, Int], 0)) {
+        case ((m, cnt), x) =>
+          (m + ((x, m.getOrElse(x, 0) + 1)), cnt + 1)
       }
-
-      // Calculate the expected number of samples for finding splits
-      val weightedNumSamples = samplesFractionForFindSplits(metadata) *
-        metadata.weightedNumExamples
-      // scale tolerance by number of samples with constant factor
-      // Note: constant factor was tuned by running some tests where there were no zero
-      // feature values and validating we are never within tolerance
-      val tolerance = Utils.EPSILON * unweightedNumSamples * 100
-      // add expected zero value count and get complete statistics
-      val valueCountMap = if (weightedNumSamples - partNumSamples > tolerance) {
-        partValueCountMap + (0.0 -> (weightedNumSamples - partNumSamples))
-      } else {
-        partValueCountMap
-      }
-
       // sort distinct values
       val valueCounts = valueCountMap.toSeq.sortBy(_._1).toArray
 
+      // if possible splits is not enough or just enough, just return all possible splits
       val possibleSplits = valueCounts.length - 1
-      if (possibleSplits == 0) {
-        // constant feature
-        Array.empty[Double]
-      } else if (possibleSplits <= numSplits) {
-        // if possible splits is not enough or just enough, just return all possible splits
-        (1 to possibleSplits)
-          .map(index => (valueCounts(index - 1)._1 + valueCounts(index)._1) / 2.0)
-          .toArray
+      if (possibleSplits <= numSplits) {
+        valueCounts.map(_._1).init
       } else {
         // stride between splits
-        val stride: Double = weightedNumSamples / (numSplits + 1)
+        val stride: Double = numSamples.toDouble / (numSplits + 1)
         logDebug("stride = " + stride)
 
         // iterate `valueCount` to find splits
@@ -1099,7 +1037,7 @@ private[spark] object RandomForest extends Logging with Serializable {
           // makes the gap between currentCount and targetCount smaller,
           // previous value is a split threshold.
           if (previousGap < currentGap) {
-            splitsBuilder += (valueCounts(index - 1)._1 + valueCounts(index)._1) / 2.0
+            splitsBuilder += valueCounts(index - 1)._1
             targetCount += stride
           }
           index += 1
@@ -1133,7 +1071,7 @@ private[spark] object RandomForest extends Logging with Serializable {
    *          The feature indices are None if not subsampling features.
    */
   private[tree] def selectNodesToSplit(
-      nodeStack: mutable.ListBuffer[(Int, LearningNode)],
+      nodeStack: mutable.Stack[(Int, LearningNode)],
       maxMemoryUsage: Long,
       metadata: DecisionTreeMetadata,
       rng: Random): (Map[Int, Array[LearningNode]], Map[Int, Map[Int, NodeIndexInfo]]) = {
@@ -1146,9 +1084,8 @@ private[spark] object RandomForest extends Logging with Serializable {
     var numNodesInGroup = 0
     // If maxMemoryInMB is set very small, we want to still try to split 1 node,
     // so we allow one iteration if memUsage == 0.
-    var groupDone = false
-    while (nodeStack.nonEmpty && !groupDone) {
-      val (treeIndex, node) = nodeStack.head
+    while (nodeStack.nonEmpty && (memUsage < maxMemoryUsage || memUsage == 0)) {
+      val (treeIndex, node) = nodeStack.top
       // Choose subset of features for node (if subsampling).
       val featureSubset: Option[Array[Int]] = if (metadata.subsamplingFeatures) {
         Some(SamplingUtils.reservoirSampleAndCount(Range(0,
@@ -1159,17 +1096,15 @@ private[spark] object RandomForest extends Logging with Serializable {
       // Check if enough memory remains to add this node to the group.
       val nodeMemUsage = RandomForest.aggregateSizeForNode(metadata, featureSubset) * 8L
       if (memUsage + nodeMemUsage <= maxMemoryUsage || memUsage == 0) {
-        nodeStack.remove(0)
+        nodeStack.pop()
         mutableNodesForGroup.getOrElseUpdate(treeIndex, new mutable.ArrayBuffer[LearningNode]()) +=
           node
         mutableTreeToNodeToIndexInfo
           .getOrElseUpdate(treeIndex, new mutable.HashMap[Int, NodeIndexInfo]())(node.id)
           = new NodeIndexInfo(numNodesInGroup, featureSubset)
-        numNodesInGroup += 1
-        memUsage += nodeMemUsage
-      } else {
-        groupDone = true
       }
+      numNodesInGroup += 1
+      memUsage += nodeMemUsage
     }
     if (memUsage > maxMemoryUsage) {
       // If maxMemoryUsage is 0, we should still allow splitting 1 node.
@@ -1202,23 +1137,6 @@ private[spark] object RandomForest extends Logging with Serializable {
       metadata.numClasses * totalBins
     } else {
       3 * totalBins
-    }
-  }
-
-  /**
-   * Calculate the subsample fraction for finding splits
-   *
-   * @param metadata decision tree metadata
-   * @return subsample fraction
-   */
-  private def samplesFractionForFindSplits(
-      metadata: DecisionTreeMetadata): Double = {
-    // Calculate the number of samples for approximate quantile calculation.
-    val requiredSamples = math.max(metadata.maxBins * metadata.maxBins, 10000)
-    if (requiredSamples < metadata.numExamples) {
-      requiredSamples.toDouble / metadata.numExamples
-    } else {
-      1.0
     }
   }
 }

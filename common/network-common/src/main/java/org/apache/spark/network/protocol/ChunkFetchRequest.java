@@ -32,7 +32,7 @@ public final class ChunkFetchRequest extends AbstractMessage implements RequestM
   }
 
   @Override
-  public Message.Type type() { return Type.ChunkFetchRequest; }
+  public Type type() { return Type.ChunkFetchRequest; }
 
   @Override
   public int encodedLength() {

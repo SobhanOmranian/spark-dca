@@ -40,10 +40,6 @@ public class JavaTaskContextCompileCheck {
     tc.stageId();
     tc.stageAttemptNumber();
     tc.taskAttemptId();
-    tc.resources();
-    tc.taskMetrics();
-    tc.taskMemoryManager();
-    tc.getLocalProperties();
   }
 
   /**

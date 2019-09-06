@@ -21,7 +21,6 @@ import java.util.Collections
 
 import scala.collection.JavaConverters._
 
-import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
@@ -30,11 +29,6 @@ import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodeFormatter, CodegenContext, ExprCode}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.trees.TreeNodeRef
-import org.apache.spark.sql.catalyst.util.StringUtils.StringConcat
-import org.apache.spark.sql.execution.streaming.{StreamExecution, StreamingQueryWrapper}
-import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.streaming.StreamingQuery
-import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.{AccumulatorV2, LongAccumulator}
 
 /**
@@ -46,16 +40,6 @@ import org.apache.spark.util.{AccumulatorV2, LongAccumulator}
  *   sql("SELECT 1").debug()
  *   sql("SELECT 1").debugCodegen()
  * }}}
- *
- * or for streaming case (structured streaming):
- * {{{
- *   import org.apache.spark.sql.execution.debug._
- *   val query = df.writeStream.<...>.start()
- *   query.debugCodegen()
- * }}}
- *
- * Note that debug in structured streaming is not supported, because it doesn't make sense for
- * streaming to execute batch once while main query is running concurrently.
  */
 package object debug {
 
@@ -66,36 +50,7 @@ package object debug {
     // scalastyle:on println
   }
 
-  /**
-   * Get WholeStageCodegenExec subtrees and the codegen in a query plan into one String
-   *
-   * @param plan the query plan for codegen
-   * @return single String containing all WholeStageCodegen subtrees and corresponding codegen
-   */
   def codegenString(plan: SparkPlan): String = {
-    val concat = new StringConcat()
-    writeCodegen(concat.append, plan)
-    concat.toString
-  }
-
-  def writeCodegen(append: String => Unit, plan: SparkPlan): Unit = {
-    val codegenSeq = codegenStringSeq(plan)
-    append(s"Found ${codegenSeq.size} WholeStageCodegen subtrees.\n")
-    for (((subtree, code), i) <- codegenSeq.zipWithIndex) {
-      append(s"== Subtree ${i + 1} / ${codegenSeq.size} ==\n")
-      append(subtree)
-      append("\nGenerated code:\n")
-      append(s"${code}\n")
-    }
-  }
-
-  /**
-   * Get WholeStageCodegenExec subtrees and the codegen in a query plan
-   *
-   * @param plan the query plan for codegen
-   * @return Sequence of WholeStageCodegen subtrees and corresponding codegen
-   */
-  def codegenStringSeq(plan: SparkPlan): Seq[(String, String)] = {
     val codegenSubtrees = new collection.mutable.HashSet[WholeStageCodegenExec]()
     plan transform {
       case s: WholeStageCodegenExec =>
@@ -103,47 +58,15 @@ package object debug {
         s
       case s => s
     }
-    codegenSubtrees.toSeq.map { subtree =>
-      val (_, source) = subtree.doCodeGen()
-      (subtree.toString, CodeFormatter.format(source))
+    var output = s"Found ${codegenSubtrees.size} WholeStageCodegen subtrees.\n"
+    for ((s, i) <- codegenSubtrees.toSeq.zipWithIndex) {
+      output += s"== Subtree ${i + 1} / ${codegenSubtrees.size} ==\n"
+      output += s
+      output += "\nGenerated code:\n"
+      val (_, source) = s.doCodeGen()
+      output += s"${CodeFormatter.format(source)}\n"
     }
-  }
-
-  /**
-   * Get WholeStageCodegenExec subtrees and the codegen in a query plan into one String
-   *
-   * @param query the streaming query for codegen
-   * @return single String containing all WholeStageCodegen subtrees and corresponding codegen
-   */
-  def codegenString(query: StreamingQuery): String = {
-    val w = asStreamExecution(query)
-    if (w.lastExecution != null) {
-      codegenString(w.lastExecution.executedPlan)
-    } else {
-      "No physical plan. Waiting for data."
-    }
-  }
-
-  /**
-   * Get WholeStageCodegenExec subtrees and the codegen in a query plan
-   *
-   * @param query the streaming query for codegen
-   * @return Sequence of WholeStageCodegen subtrees and corresponding codegen
-   */
-  def codegenStringSeq(query: StreamingQuery): Seq[(String, String)] = {
-    val w = asStreamExecution(query)
-    if (w.lastExecution != null) {
-      codegenStringSeq(w.lastExecution.executedPlan)
-    } else {
-      Seq.empty
-    }
-  }
-
-  private def asStreamExecution(query: StreamingQuery): StreamExecution = query match {
-    case wrapper: StreamingQueryWrapper => wrapper.streamingQuery
-    case q: StreamExecution => q
-    case _ => throw new IllegalArgumentException("Parameter should be an instance of " +
-      "StreamExecution!")
+    output
   }
 
   /**
@@ -151,8 +74,9 @@ package object debug {
    */
   implicit class DebugQuery(query: Dataset[_]) extends Logging {
     def debug(): Unit = {
+      val plan = query.queryExecution.executedPlan
       val visited = new collection.mutable.HashSet[TreeNodeRef]()
-      val debugPlan = query.queryExecution.executedPlan transform {
+      val debugPlan = plan transform {
         case s: SparkPlan if !visited.contains(new TreeNodeRef(s)) =>
           visited += new TreeNodeRef(s)
           DebugExec(s)
@@ -170,12 +94,6 @@ package object debug {
      */
     def debugCodegen(): Unit = {
       debugPrint(codegenString(query.queryExecution.executedPlan))
-    }
-  }
-
-  implicit class DebugStreamQuery(query: StreamingQuery) extends Logging {
-    def debugCodegen(): Unit = {
-      debugPrint(codegenString(query))
     }
   }
 
@@ -212,7 +130,7 @@ package object debug {
     val columnStats: Array[ColumnMetrics] = Array.fill(child.output.size)(new ColumnMetrics())
 
     def dumpStats(): Unit = {
-      debugPrint(s"== ${child.simpleString(SQLConf.get.maxToStringFields)} ==")
+      debugPrint(s"== ${child.simpleString} ==")
       debugPrint(s"Tuples output: ${tupleCount.value}")
       child.output.zip(columnStats).foreach { case (attr, metric) =>
         // This is called on driver. All accumulator updates have a fixed value. So it's safe to use
@@ -257,15 +175,5 @@ package object debug {
     override def doConsume(ctx: CodegenContext, input: Seq[ExprCode], row: ExprCode): String = {
       consume(ctx, input)
     }
-
-    override def doExecuteBroadcast[T](): Broadcast[T] = {
-      child.executeBroadcast()
-    }
-
-    override def doExecuteColumnar(): RDD[ColumnarBatch] = {
-      child.executeColumnar()
-    }
-
-    override def supportsColumnar: Boolean = child.supportsColumnar
   }
 }

@@ -324,11 +324,7 @@ case class ScalaUDAF(
     udaf: UserDefinedAggregateFunction,
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0)
-  extends ImperativeAggregate
-  with NonSQLExpression
-  with Logging
-  with ImplicitCastInputTypes
-  with UserDefinedExpression {
+  extends ImperativeAggregate with NonSQLExpression with Logging with ImplicitCastInputTypes {
 
   override def withNewMutableAggBufferOffset(newMutableAggBufferOffset: Int): ImperativeAggregate =
     copy(mutableAggBufferOffset = newMutableAggBufferOffset)
@@ -340,7 +336,7 @@ case class ScalaUDAF(
 
   override def dataType: DataType = udaf.dataType
 
-  override lazy val deterministic: Boolean = udaf.deterministic
+  override def deterministic: Boolean = udaf.deterministic
 
   override val inputTypes: Seq[DataType] = udaf.inputSchema.map(_.dataType)
 
@@ -365,7 +361,7 @@ case class ScalaUDAF(
     val inputAttributes = childrenSchema.toAttributes
     log.debug(
       s"Creating MutableProj: $children, inputSchema: $inputAttributes.")
-    MutableProjection.create(children, inputAttributes)
+    GenerateMutableProjection.generate(children, inputAttributes)
   }
 
   private[this] lazy val inputToScalaConverters: Any => Any =

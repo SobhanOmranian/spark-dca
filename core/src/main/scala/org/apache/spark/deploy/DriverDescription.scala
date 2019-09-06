@@ -17,15 +17,12 @@
 
 package org.apache.spark.deploy
 
-import org.apache.spark.resource.ResourceRequirement
-
 private[deploy] case class DriverDescription(
     jarUrl: String,
     mem: Int,
     cores: Int,
     supervise: Boolean,
-    command: Command,
-    resourceReqs: Seq[ResourceRequirement] = Seq.empty) {
+    command: Command) {
 
   override def toString: String = s"DriverDescription (${command.mainClass})"
 }

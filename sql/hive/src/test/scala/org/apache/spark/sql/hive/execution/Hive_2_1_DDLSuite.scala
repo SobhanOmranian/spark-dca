@@ -17,12 +17,15 @@
 
 package org.apache.spark.sql.hive.execution
 
+import scala.language.existentials
+
 import org.apache.hadoop.conf.Configuration
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach}
 
 import org.apache.spark.{SparkConf, SparkFunSuite}
 import org.apache.spark.launcher.SparkLauncher
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.hive.{HiveExternalCatalog, HiveUtils}
 import org.apache.spark.sql.hive.test.TestHiveSingleton
 import org.apache.spark.sql.internal.StaticSQLConf._
@@ -71,11 +74,7 @@ class Hive_2_1_DDLSuite extends SparkFunSuite with TestHiveSingleton with Before
   }
 
   override def afterAll(): Unit = {
-    try {
-      catalog = null
-    } finally {
-      super.afterAll()
-    }
+    catalog = null
   }
 
   test("SPARK-21617: ALTER TABLE for non-compatible DataSource tables") {

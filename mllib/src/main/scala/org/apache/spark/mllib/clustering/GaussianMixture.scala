@@ -232,7 +232,7 @@ class GaussianMixture private (
       llhp = llh // current becomes previous
       llh = sums.logLikelihood // this is the freshly computed log-likelihood
       iter += 1
-      compute.destroy()
+      compute.destroy(blocking = false)
     }
 
     new GaussianMixtureModel(weights, gaussians)

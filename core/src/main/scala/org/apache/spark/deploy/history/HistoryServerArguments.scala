@@ -34,19 +34,33 @@ private[history] class HistoryServerArguments(conf: SparkConf, args: Array[Strin
 
   @tailrec
   private def parse(args: List[String]): Unit = {
-    args match {
-      case ("--help" | "-h") :: tail =>
-        printUsageAndExit(0)
+    if (args.length == 1) {
+      setLogDirectory(args.head)
+    } else {
+      args match {
+        case ("--dir" | "-d") :: value :: tail =>
+          setLogDirectory(value)
+          parse(tail)
 
-      case ("--properties-file") :: value :: tail =>
-        propertiesFile = value
-        parse(tail)
+        case ("--help" | "-h") :: tail =>
+          printUsageAndExit(0)
 
-      case Nil =>
+        case ("--properties-file") :: value :: tail =>
+          propertiesFile = value
+          parse(tail)
 
-      case _ =>
-        printUsageAndExit(1)
+        case Nil =>
+
+        case _ =>
+          printUsageAndExit(1)
+      }
     }
+  }
+
+  private def setLogDirectory(value: String): Unit = {
+    logWarning("Setting log directory through the command line is deprecated as of " +
+      "Spark 1.1.0. Please set this through spark.history.fs.logDirectory instead.")
+    conf.set("spark.history.fs.logDirectory", value)
   }
 
    // This mutates the SparkConf, so all accesses to it must be made after this line
@@ -59,6 +73,8 @@ private[history] class HistoryServerArguments(conf: SparkConf, args: Array[Strin
       |Usage: HistoryServer [options]
       |
       |Options:
+      |  DIR                         Deprecated; set spark.history.fs.logDirectory directly
+      |  --dir DIR (-d DIR)          Deprecated; set spark.history.fs.logDirectory directly
       |  --properties-file FILE      Path to a custom Spark properties file.
       |                              Default is conf/spark-defaults.conf.
       |
@@ -79,7 +95,7 @@ private[history] class HistoryServerArguments(conf: SparkConf, args: Array[Strin
       |
       |  spark.history.fs.logDirectory      Directory where app logs are stored
       |                                     (default: file:/tmp/spark-events)
-      |  spark.history.fs.update.interval   How often to reload log data from storage
+      |  spark.history.fs.updateInterval    How often to reload log data from storage
       |                                     (in seconds, default: 10)
       |""".stripMargin)
     // scalastyle:on println

@@ -22,6 +22,7 @@ import java.net.URLClassLoader
 import scala.collection.JavaConverters._
 
 import org.scalatest.Matchers
+import org.scalatest.Matchers._
 
 import org.apache.spark.{SparkContext, SparkException, SparkFunSuite, TestUtils}
 
@@ -45,10 +46,10 @@ class MutableURLClassLoaderSuite extends SparkFunSuite with Matchers {
   test("child first") {
     val parentLoader = new URLClassLoader(urls2, null)
     val classLoader = new ChildFirstURLClassLoader(urls, parentLoader)
-    val fakeClass = classLoader.loadClass("FakeClass2").getConstructor().newInstance()
+    val fakeClass = classLoader.loadClass("FakeClass2").newInstance()
     val fakeClassVersion = fakeClass.toString
     assert(fakeClassVersion === "1")
-    val fakeClass2 = classLoader.loadClass("FakeClass2").getConstructor().newInstance()
+    val fakeClass2 = classLoader.loadClass("FakeClass2").newInstance()
     assert(fakeClass.getClass === fakeClass2.getClass)
     classLoader.close()
     parentLoader.close()
@@ -57,10 +58,10 @@ class MutableURLClassLoaderSuite extends SparkFunSuite with Matchers {
   test("parent first") {
     val parentLoader = new URLClassLoader(urls2, null)
     val classLoader = new MutableURLClassLoader(urls, parentLoader)
-    val fakeClass = classLoader.loadClass("FakeClass1").getConstructor().newInstance()
+    val fakeClass = classLoader.loadClass("FakeClass1").newInstance()
     val fakeClassVersion = fakeClass.toString
     assert(fakeClassVersion === "2")
-    val fakeClass2 = classLoader.loadClass("FakeClass1").getConstructor().newInstance()
+    val fakeClass2 = classLoader.loadClass("FakeClass1").newInstance()
     assert(fakeClass.getClass === fakeClass2.getClass)
     classLoader.close()
     parentLoader.close()
@@ -69,7 +70,7 @@ class MutableURLClassLoaderSuite extends SparkFunSuite with Matchers {
   test("child first can fall back") {
     val parentLoader = new URLClassLoader(urls2, null)
     val classLoader = new ChildFirstURLClassLoader(urls, parentLoader)
-    val fakeClass = classLoader.loadClass("FakeClass3").getConstructor().newInstance()
+    val fakeClass = classLoader.loadClass("FakeClass3").newInstance()
     val fakeClassVersion = fakeClass.toString
     assert(fakeClassVersion === "2")
     classLoader.close()
@@ -80,7 +81,7 @@ class MutableURLClassLoaderSuite extends SparkFunSuite with Matchers {
     val parentLoader = new URLClassLoader(urls2, null)
     val classLoader = new ChildFirstURLClassLoader(urls, parentLoader)
     intercept[java.lang.ClassNotFoundException] {
-      classLoader.loadClass("FakeClassDoesNotExist").getConstructor().newInstance()
+      classLoader.loadClass("FakeClassDoesNotExist").newInstance()
     }
     classLoader.close()
     parentLoader.close()
@@ -134,8 +135,10 @@ class MutableURLClassLoaderSuite extends SparkFunSuite with Matchers {
 
     try {
       sc.makeRDD(1 to 5, 2).mapPartitions { x =>
-        Utils.classForName[AnyRef](className, noSparkClassLoader = true).
-          getConstructor().newInstance()
+        val loader = Thread.currentThread().getContextClassLoader
+        // scalastyle:off classforname
+        Class.forName(className, true, loader).newInstance()
+        // scalastyle:on classforname
         Seq().iterator
       }.count()
     }

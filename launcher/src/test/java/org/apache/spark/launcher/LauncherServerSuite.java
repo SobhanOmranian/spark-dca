@@ -23,14 +23,12 @@ import java.io.ObjectInputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.SocketException;
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.Test;
 import static org.junit.Assert.*;
@@ -41,27 +39,39 @@ public class LauncherServerSuite extends BaseSuite {
 
   @Test
   public void testLauncherServerReuse() throws Exception {
-    LauncherServer server1 = LauncherServer.getOrCreateServer();
-    ChildProcAppHandle handle = new ChildProcAppHandle(server1);
-    handle.kill();
+    ChildProcAppHandle handle1 = null;
+    ChildProcAppHandle handle2 = null;
+    ChildProcAppHandle handle3 = null;
 
-    LauncherServer server2 = LauncherServer.getOrCreateServer();
     try {
-      assertNotSame(server1, server2);
+      handle1 = LauncherServer.newAppHandle();
+      handle2 = LauncherServer.newAppHandle();
+      LauncherServer server1 = handle1.getServer();
+      assertSame(server1, handle2.getServer());
+
+      handle1.kill();
+      handle2.kill();
+
+      handle3 = LauncherServer.newAppHandle();
+      assertNotSame(server1, handle3.getServer());
+
+      handle3.kill();
+
+      assertNull(LauncherServer.getServerInstance());
     } finally {
-      server2.unref();
+      kill(handle1);
+      kill(handle2);
+      kill(handle3);
     }
   }
 
   @Test
   public void testCommunication() throws Exception {
-    LauncherServer server = LauncherServer.getOrCreateServer();
-    ChildProcAppHandle handle = new ChildProcAppHandle(server);
-    String secret = server.registerHandle(handle);
-
+    ChildProcAppHandle handle = LauncherServer.newAppHandle();
     TestClient client = null;
     try {
-      Socket s = new Socket(InetAddress.getLoopbackAddress(), server.getPort());
+      Socket s = new Socket(InetAddress.getLoopbackAddress(),
+        LauncherServer.getServerInstance().getPort());
 
       final Semaphore semaphore = new Semaphore(0);
       handle.addListener(new SparkAppHandle.Listener() {
@@ -76,7 +86,7 @@ public class LauncherServerSuite extends BaseSuite {
       });
 
       client = new TestClient(s);
-      client.send(new Hello(secret, "1.4.0"));
+      client.send(new Hello(handle.getSecret(), "1.4.0"));
       assertTrue(semaphore.tryAcquire(30, TimeUnit.SECONDS));
 
       // Make sure the server matched the client to the handle.
@@ -94,44 +104,42 @@ public class LauncherServerSuite extends BaseSuite {
       Message stopMsg = client.inbound.poll(30, TimeUnit.SECONDS);
       assertTrue(stopMsg instanceof Stop);
     } finally {
+      kill(handle);
       close(client);
-      handle.kill();
       client.clientThread.join();
     }
   }
 
   @Test
   public void testTimeout() throws Exception {
-    LauncherServer server = LauncherServer.getOrCreateServer();
-    ChildProcAppHandle handle = new ChildProcAppHandle(server);
-    String secret = server.registerHandle(handle);
-
+    ChildProcAppHandle handle = null;
     TestClient client = null;
     try {
       // LauncherServer will immediately close the server-side socket when the timeout is set
       // to 0.
       SparkLauncher.setConfig(SparkLauncher.CHILD_CONNECTION_TIMEOUT, "0");
 
-      Socket s = new Socket(InetAddress.getLoopbackAddress(), server.getPort());
+      handle = LauncherServer.newAppHandle();
+
+      Socket s = new Socket(InetAddress.getLoopbackAddress(),
+        LauncherServer.getServerInstance().getPort());
       client = new TestClient(s);
-      waitForError(client, secret);
+      waitForError(client, handle.getSecret());
     } finally {
       SparkLauncher.launcherConfig.remove(SparkLauncher.CHILD_CONNECTION_TIMEOUT);
-      handle.kill();
+      kill(handle);
       close(client);
     }
   }
 
   @Test
   public void testSparkSubmitVmShutsDown() throws Exception {
-    LauncherServer server = LauncherServer.getOrCreateServer();
-    ChildProcAppHandle handle = new ChildProcAppHandle(server);
-    String secret = server.registerHandle(handle);
-
+    ChildProcAppHandle handle = LauncherServer.newAppHandle();
     TestClient client = null;
     final Semaphore semaphore = new Semaphore(0);
     try {
-      Socket s = new Socket(InetAddress.getLoopbackAddress(), server.getPort());
+      Socket s = new Socket(InetAddress.getLoopbackAddress(),
+        LauncherServer.getServerInstance().getPort());
       handle.addListener(new SparkAppHandle.Listener() {
         public void stateChanged(SparkAppHandle handle) {
           semaphore.release();
@@ -141,16 +149,15 @@ public class LauncherServerSuite extends BaseSuite {
         }
       });
       client = new TestClient(s);
-      client.send(new Hello(secret, "1.4.0"));
+      client.send(new Hello(handle.getSecret(), "1.4.0"));
       assertTrue(semaphore.tryAcquire(30, TimeUnit.SECONDS));
       // Make sure the server matched the client to the handle.
       assertNotNull(handle.getConnection());
-      client.close();
-      handle.dispose();
+      close(client);
       assertTrue(semaphore.tryAcquire(30, TimeUnit.SECONDS));
       assertEquals(SparkAppHandle.State.LOST, handle.getState());
     } finally {
-      handle.kill();
+      kill(handle);
       close(client);
       client.clientThread.join();
     }
@@ -158,13 +165,11 @@ public class LauncherServerSuite extends BaseSuite {
 
   @Test
   public void testStreamFiltering() throws Exception {
-    LauncherServer server = LauncherServer.getOrCreateServer();
-    ChildProcAppHandle handle = new ChildProcAppHandle(server);
-    String secret = server.registerHandle(handle);
-
+    ChildProcAppHandle handle = LauncherServer.newAppHandle();
     TestClient client = null;
     try {
-      Socket s = new Socket(InetAddress.getLoopbackAddress(), server.getPort());
+      Socket s = new Socket(InetAddress.getLoopbackAddress(),
+        LauncherServer.getServerInstance().getPort());
 
       client = new TestClient(s);
 
@@ -176,40 +181,18 @@ public class LauncherServerSuite extends BaseSuite {
         // happening for other reasons).
       }
 
-      waitForError(client, secret);
+      waitForError(client, handle.getSecret());
       assertEquals(0, EvilPayload.EVIL_BIT);
     } finally {
-      handle.kill();
+      kill(handle);
       close(client);
       client.clientThread.join();
     }
   }
 
-  @Test
-  public void testAppHandleDisconnect() throws Exception {
-    LauncherServer server = LauncherServer.getOrCreateServer();
-    ChildProcAppHandle handle = new ChildProcAppHandle(server);
-    String secret = server.registerHandle(handle);
-
-    TestClient client = null;
-    try {
-      Socket s = new Socket(InetAddress.getLoopbackAddress(), server.getPort());
-      client = new TestClient(s);
-      client.send(new Hello(secret, "1.4.0"));
-      client.send(new SetAppId("someId"));
-
-      // Wait until we know the server has received the messages and matched the handle to the
-      // connection before disconnecting.
-      eventually(Duration.ofSeconds(1), Duration.ofMillis(10), () -> {
-        assertEquals("someId", handle.getAppId());
-      });
-
-      handle.disconnect();
-      waitForError(client, secret);
-    } finally {
+  private void kill(SparkAppHandle handle) {
+    if (handle != null) {
       handle.kill();
-      close(client);
-      client.clientThread.join();
     }
   }
 
@@ -228,20 +211,28 @@ public class LauncherServerSuite extends BaseSuite {
    * server-side close immediately.
    */
   private void waitForError(TestClient client, String secret) throws Exception {
-    final AtomicBoolean helloSent = new AtomicBoolean();
-    eventually(Duration.ofSeconds(1), Duration.ofMillis(10), () -> {
+    boolean helloSent = false;
+    int maxTries = 10;
+    for (int i = 0; i < maxTries; i++) {
       try {
-        if (!helloSent.get()) {
+        if (!helloSent) {
           client.send(new Hello(secret, "1.4.0"));
-          helloSent.set(true);
+          helloSent = true;
         } else {
           client.send(new SetAppId("appId"));
         }
         fail("Expected error but message went through.");
       } catch (IllegalStateException | IOException e) {
         // Expected.
+        break;
+      } catch (AssertionError e) {
+        if (i < maxTries - 1) {
+          Thread.sleep(100);
+        } else {
+          throw new AssertionError("Test failed after " + maxTries + " attempts.", e);
+        }
       }
-    });
+    }
   }
 
   private static class TestClient extends LauncherConnection {

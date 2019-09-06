@@ -17,6 +17,4 @@ rem See the License for the specific language governing permissions and
 rem limitations under the License.
 rem
 
-rem The outermost quotes are used to prevent Windows command line parse error
-rem when there are some quotes in parameters, see SPARK-21877.
-cmd /V /E /C ""%~dp0spark-class.cmd" org.apache.hive.beeline.BeeLine %*"
+cmd /V /E /C "%~dp0spark-class.cmd" org.apache.hive.beeline.BeeLine %*

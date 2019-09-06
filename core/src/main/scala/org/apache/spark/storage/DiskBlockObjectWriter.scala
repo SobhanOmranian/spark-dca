@@ -20,11 +20,10 @@ package org.apache.spark.storage
 import java.io.{BufferedOutputStream, File, FileOutputStream, OutputStream}
 import java.nio.channels.FileChannel
 
+import org.apache.spark.executor.ShuffleWriteMetrics
 import org.apache.spark.internal.Logging
 import org.apache.spark.serializer.{SerializationStream, SerializerInstance, SerializerManager}
-import org.apache.spark.shuffle.ShuffleWriteMetricsReporter
 import org.apache.spark.util.Utils
-import org.apache.spark.util.collection.PairsWriter
 
 /**
  * A class for writing JVM objects directly to a file on disk. This class allows data to be appended
@@ -44,11 +43,10 @@ private[spark] class DiskBlockObjectWriter(
     syncWrites: Boolean,
     // These write metrics concurrently shared with other active DiskBlockObjectWriters who
     // are themselves performing writes. All updates must be relative.
-    writeMetrics: ShuffleWriteMetricsReporter,
+    writeMetrics: ShuffleWriteMetrics,
     val blockId: BlockId = null)
   extends OutputStream
-  with Logging
-  with PairsWriter {
+  with Logging {
 
   /**
    * Guards against close calls, e.g. from a wrapping stream.
@@ -234,7 +232,7 @@ private[spark] class DiskBlockObjectWriter(
   /**
    * Writes a key-value pair.
    */
-  override def write(key: Any, value: Any) {
+  def write(key: Any, value: Any) {
     if (!streamOpen) {
       open()
     }

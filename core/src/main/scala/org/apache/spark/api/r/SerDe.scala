@@ -74,9 +74,9 @@ private[spark] object SerDe {
       jvmObjectTracker: JVMObjectTracker): Object = {
     dataType match {
       case 'n' => null
-      case 'i' => java.lang.Integer.valueOf(readInt(dis))
-      case 'd' => java.lang.Double.valueOf(readDouble(dis))
-      case 'b' => java.lang.Boolean.valueOf(readBoolean(dis))
+      case 'i' => new java.lang.Integer(readInt(dis))
+      case 'd' => new java.lang.Double(readDouble(dis))
+      case 'b' => new java.lang.Boolean(readBoolean(dis))
       case 'c' => readString(dis)
       case 'e' => readMap(dis, jvmObjectTracker)
       case 'r' => readBytes(dis)
@@ -102,7 +102,7 @@ private[spark] object SerDe {
   def readBytes(in: DataInputStream): Array[Byte] = {
     val len = readInt(in)
     val out = new Array[Byte](len)
-    in.readFully(out)
+    val bytesRead = in.readFully(out)
     out
   }
 
@@ -128,7 +128,8 @@ private[spark] object SerDe {
   }
 
   def readBoolean(in: DataInputStream): Boolean = {
-    in.readInt() != 0
+    val intVal = in.readInt()
+    if (intVal == 0) false else true
   }
 
   def readDate(in: DataInputStream): Date = {

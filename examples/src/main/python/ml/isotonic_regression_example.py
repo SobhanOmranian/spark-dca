@@ -17,9 +17,6 @@
 
 """
 Isotonic Regression Example.
-
-Run with:
-  bin/spark-submit examples/src/main/python/ml/isotonic_regression_example.py
 """
 from __future__ import print_function
 
@@ -27,6 +24,12 @@ from __future__ import print_function
 from pyspark.ml.regression import IsotonicRegression
 # $example off$
 from pyspark.sql import SparkSession
+
+"""
+An example demonstrating isotonic regression.
+Run with:
+  bin/spark-submit examples/src/main/python/ml/isotonic_regression_example.py
+"""
 
 if __name__ == "__main__":
     spark = SparkSession\

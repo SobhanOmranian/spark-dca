@@ -15,15 +15,14 @@
 # limitations under the License.
 #
 
-import sys
-import warnings
-
 import numpy as np
+from numpy import array
+import warnings
 
 from pyspark import RDD, since
 from pyspark.streaming.dstream import DStream
 from pyspark.mllib.common import callMLlibFunc, _py2java, _java2py, inherit_doc
-from pyspark.mllib.linalg import SparseVector, _convert_to_vector
+from pyspark.mllib.linalg import SparseVector, Vectors, _convert_to_vector
 from pyspark.mllib.util import Saveable, Loader
 
 __all__ = ['LabeledPoint', 'LinearModel',
@@ -167,15 +166,15 @@ class LinearRegressionModel(LinearRegressionModelBase):
     ...     LabeledPoint(2.0, SparseVector(1, {0: 3.0}))
     ... ]
     >>> lrm = LinearRegressionWithSGD.train(sc.parallelize(data), iterations=10,
-    ...     initialWeights=np.array([1.0]))
-    >>> abs(lrm.predict(np.array([0.0])) - 0) < 0.5
+    ...     initialWeights=array([1.0]))
+    >>> abs(lrm.predict(array([0.0])) - 0) < 0.5
     True
     >>> abs(lrm.predict(SparseVector(1, {0: 1.0})) - 1) < 0.5
     True
     >>> lrm = LinearRegressionWithSGD.train(sc.parallelize(data), iterations=10, step=1.0,
-    ...    miniBatchFraction=1.0, initialWeights=np.array([1.0]), regParam=0.1, regType="l2",
+    ...    miniBatchFraction=1.0, initialWeights=array([1.0]), regParam=0.1, regType="l2",
     ...    intercept=True, validateData=True)
-    >>> abs(lrm.predict(np.array([0.0])) - 0) < 0.5
+    >>> abs(lrm.predict(array([0.0])) - 0) < 0.5
     True
     >>> abs(lrm.predict(SparseVector(1, {0: 1.0})) - 1) < 0.5
     True
@@ -279,8 +278,7 @@ class LinearRegressionWithSGD(object):
           A condition which decides iteration termination.
           (default: 0.001)
         """
-        warnings.warn(
-            "Deprecated in 2.0.0. Use ml.regression.LinearRegression.", DeprecationWarning)
+        warnings.warn("Deprecated in 2.0.0. Use ml.regression.LinearRegression.")
 
         def train(rdd, i):
             return callMLlibFunc("trainLinearRegressionModelWithSGD", rdd, int(iterations),
@@ -304,8 +302,7 @@ class LassoModel(LinearRegressionModelBase):
     ...     LabeledPoint(3.0, [2.0]),
     ...     LabeledPoint(2.0, [3.0])
     ... ]
-    >>> lrm = LassoWithSGD.train(
-    ...     sc.parallelize(data), iterations=10, initialWeights=np.array([1.0]))
+    >>> lrm = LassoWithSGD.train(sc.parallelize(data), iterations=10, initialWeights=array([1.0]))
     >>> abs(lrm.predict(np.array([0.0])) - 0) < 0.5
     True
     >>> abs(lrm.predict(np.array([1.0])) - 1) < 0.5
@@ -336,13 +333,13 @@ class LassoModel(LinearRegressionModelBase):
     ...     LabeledPoint(2.0, SparseVector(1, {0: 3.0}))
     ... ]
     >>> lrm = LinearRegressionWithSGD.train(sc.parallelize(data), iterations=10,
-    ...     initialWeights=np.array([1.0]))
+    ...     initialWeights=array([1.0]))
     >>> abs(lrm.predict(np.array([0.0])) - 0) < 0.5
     True
     >>> abs(lrm.predict(SparseVector(1, {0: 1.0})) - 1) < 0.5
     True
     >>> lrm = LassoWithSGD.train(sc.parallelize(data), iterations=10, step=1.0,
-    ...     regParam=0.01, miniBatchFraction=1.0, initialWeights=np.array([1.0]), intercept=True,
+    ...     regParam=0.01, miniBatchFraction=1.0, initialWeights=array([1.0]), intercept=True,
     ...     validateData=True)
     >>> abs(lrm.predict(np.array([0.0])) - 0) < 0.5
     True
@@ -424,8 +421,7 @@ class LassoWithSGD(object):
         """
         warnings.warn(
             "Deprecated in 2.0.0. Use ml.regression.LinearRegression with elasticNetParam = 1.0. "
-            "Note the default regParam is 0.01 for LassoWithSGD, but is 0.0 for LinearRegression.",
-            DeprecationWarning)
+            "Note the default regParam is 0.01 for LassoWithSGD, but is 0.0 for LinearRegression.")
 
         def train(rdd, i):
             return callMLlibFunc("trainLassoModelWithSGD", rdd, int(iterations), float(step),
@@ -449,7 +445,7 @@ class RidgeRegressionModel(LinearRegressionModelBase):
     ...     LabeledPoint(2.0, [3.0])
     ... ]
     >>> lrm = RidgeRegressionWithSGD.train(sc.parallelize(data), iterations=10,
-    ...     initialWeights=np.array([1.0]))
+    ...     initialWeights=array([1.0]))
     >>> abs(lrm.predict(np.array([0.0])) - 0) < 0.5
     True
     >>> abs(lrm.predict(np.array([1.0])) - 1) < 0.5
@@ -480,13 +476,13 @@ class RidgeRegressionModel(LinearRegressionModelBase):
     ...     LabeledPoint(2.0, SparseVector(1, {0: 3.0}))
     ... ]
     >>> lrm = LinearRegressionWithSGD.train(sc.parallelize(data), iterations=10,
-    ...     initialWeights=np.array([1.0]))
+    ...     initialWeights=array([1.0]))
     >>> abs(lrm.predict(np.array([0.0])) - 0) < 0.5
     True
     >>> abs(lrm.predict(SparseVector(1, {0: 1.0})) - 1) < 0.5
     True
     >>> lrm = RidgeRegressionWithSGD.train(sc.parallelize(data), iterations=10, step=1.0,
-    ...     regParam=0.01, miniBatchFraction=1.0, initialWeights=np.array([1.0]), intercept=True,
+    ...     regParam=0.01, miniBatchFraction=1.0, initialWeights=array([1.0]), intercept=True,
     ...     validateData=True)
     >>> abs(lrm.predict(np.array([0.0])) - 0) < 0.5
     True
@@ -570,7 +566,7 @@ class RidgeRegressionWithSGD(object):
         warnings.warn(
             "Deprecated in 2.0.0. Use ml.regression.LinearRegression with elasticNetParam = 0.0. "
             "Note the default regParam is 0.01 for RidgeRegressionWithSGD, but is 0.0 for "
-            "LinearRegression.", DeprecationWarning)
+            "LinearRegression.")
 
         def train(rdd, i):
             return callMLlibFunc("trainRidgeModelWithSGD", rdd, int(iterations), float(step),
@@ -839,7 +835,7 @@ def _test():
     (failure_count, test_count) = doctest.testmod(globs=globs, optionflags=doctest.ELLIPSIS)
     spark.stop()
     if failure_count:
-        sys.exit(-1)
+        exit(-1)
 
 if __name__ == "__main__":
     _test()

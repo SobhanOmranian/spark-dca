@@ -39,9 +39,7 @@ public class UnsafeAlignedOffset {
       case 8:
         return (int)Platform.getLong(object, offset);
       default:
-        // checkstyle.off: RegexpSinglelineJava
         throw new AssertionError("Illegal UAO_SIZE");
-        // checkstyle.on: RegexpSinglelineJava
     }
   }
 
@@ -54,9 +52,7 @@ public class UnsafeAlignedOffset {
         Platform.putLong(object, offset, value);
         break;
       default:
-        // checkstyle.off: RegexpSinglelineJava
         throw new AssertionError("Illegal UAO_SIZE");
-        // checkstyle.on: RegexpSinglelineJava
     }
   }
 }

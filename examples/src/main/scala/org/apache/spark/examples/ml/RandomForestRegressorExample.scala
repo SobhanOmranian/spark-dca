@@ -72,10 +72,10 @@ object RandomForestRegressorExample {
       .setPredictionCol("prediction")
       .setMetricName("rmse")
     val rmse = evaluator.evaluate(predictions)
-    println(s"Root Mean Squared Error (RMSE) on test data = $rmse")
+    println("Root Mean Squared Error (RMSE) on test data = " + rmse)
 
     val rfModel = model.stages(1).asInstanceOf[RandomForestRegressionModel]
-    println(s"Learned regression forest model:\n ${rfModel.toDebugString}")
+    println("Learned regression forest model:\n" + rfModel.toDebugString)
     // $example off$
 
     spark.stop()

@@ -114,10 +114,7 @@ class ManifestFileCommitProtocol(jobId: String, path: String)
   }
 
   override def abortTask(taskContext: TaskAttemptContext): Unit = {
-    // best effort cleanup of incomplete files
-    if (addedFiles.nonEmpty) {
-      val fs = new Path(addedFiles.head).getFileSystem(taskContext.getConfiguration)
-      addedFiles.foreach { file => fs.delete(new Path(file), false) }
-    }
+    // Do nothing
+    // TODO: we can also try delete the addedFiles as a best-effort cleanup.
   }
 }

@@ -92,29 +92,13 @@ private[spark] class ConfigReader(conf: ConfigProvider) {
         require(!usedRefs.contains(ref), s"Circular reference in $input: $ref")
 
         val replacement = bindings.get(prefix)
-          .flatMap(getOrDefault(_, name))
+          .flatMap(_.get(name))
           .map { v => substitute(v, usedRefs + ref) }
           .getOrElse(m.matched)
         Regex.quoteReplacement(replacement)
       })
     } else {
       input
-    }
-  }
-
-  /**
-   * Gets the value of a config from the given `ConfigProvider`. If no value is found for this
-   * config, and the `ConfigEntry` defines this config has default value, return the default value.
-   */
-  private def getOrDefault(conf: ConfigProvider, key: String): Option[String] = {
-    conf.get(key).orElse {
-      ConfigEntry.findEntry(key) match {
-        case e: ConfigEntryWithDefault[_] => Option(e.defaultValueString)
-        case e: ConfigEntryWithDefaultString[_] => Option(e.defaultValueString)
-        case e: ConfigEntryWithDefaultFunction[_] => Option(e.defaultValueString)
-        case e: FallbackConfigEntry[_] => getOrDefault(conf, e.fallback.key)
-        case _ => None
-      }
     }
   }
 

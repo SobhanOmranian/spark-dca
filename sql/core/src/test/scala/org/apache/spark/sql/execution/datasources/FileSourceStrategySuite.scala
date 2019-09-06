@@ -25,7 +25,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{BlockLocation, FileStatus, Path, RawLocalFileSystem}
 import org.apache.hadoop.mapreduce.Job
 
-import org.apache.spark.SparkException
+import org.apache.spark.{SparkConf, SparkException}
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
@@ -35,11 +35,11 @@ import org.apache.spark.sql.execution.{DataSourceScanExec, SparkPlan}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.sources._
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 import org.apache.spark.sql.types.{IntegerType, StructType}
 import org.apache.spark.util.Utils
 
-class FileSourceStrategySuite extends QueryTest with SharedSparkSession with PredicateHelper {
+class FileSourceStrategySuite extends QueryTest with SharedSQLContext with PredicateHelper {
   import testImplicits._
 
   protected override def sparkConf = super.sparkConf.set("spark.default.parallelism", "1")
@@ -190,7 +190,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
     checkDataFilters(Set.empty)
 
     // Only one file should be read.
-    checkScan(table.where("p1 = 1 AND c1 = 1 AND (p1 + c1) = 2")) { partitions =>
+    checkScan(table.where("p1 = 1 AND c1 = 1 AND (p1 + c1) = 1")) { partitions =>
       assert(partitions.size == 1, "when checking partitions")
       assert(partitions.head.files.size == 1, "when checking files in partition 1")
       assert(partitions.head.files.head.partitionValues.getInt(0) == 1,
@@ -201,7 +201,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
   }
 
   test("partitioned table - case insensitive") {
-    withSQLConf(SQLConf.CASE_SENSITIVE.key -> "false") {
+    withSQLConf("spark.sql.caseSensitive" -> "false") {
       val table =
         createTable(
           files = Seq(
@@ -217,7 +217,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
       checkDataFilters(Set.empty)
 
       // Only one file should be read.
-      checkScan(table.where("P1 = 1 AND C1 = 1 AND (P1 + C1) = 2")) { partitions =>
+      checkScan(table.where("P1 = 1 AND C1 = 1 AND (P1 + C1) = 1")) { partitions =>
         assert(partitions.size == 1, "when checking partitions")
         assert(partitions.head.files.size == 1, "when checking files in partition 1")
         assert(partitions.head.files.head.partitionValues.getInt(0) == 1,
@@ -235,17 +235,13 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
           "p1=1/file1" -> 10,
           "p1=2/file2" -> 10))
 
-    val df1 = table.where("p1 = 1 AND (p1 + c1) = 2 AND c1 = 1")
+    val df = table.where("p1 = 1 AND (p1 + c1) = 2 AND c1 = 1")
     // Filter on data only are advisory so we have to reevaluate.
-    assert(getPhysicalFilters(df1) contains resolve(df1, "c1 = 1"))
+    assert(getPhysicalFilters(df) contains resolve(df, "c1 = 1"))
+    // Need to evalaute filters that are not pushed down.
+    assert(getPhysicalFilters(df) contains resolve(df, "(p1 + c1) = 2"))
     // Don't reevaluate partition only filters.
-    assert(!(getPhysicalFilters(df1) contains resolve(df1, "p1 = 1")))
-
-    val df2 = table.where("(p1 + c2) = 2 AND c1 = 1")
-    // Filter on data only are advisory so we have to reevaluate.
-    assert(getPhysicalFilters(df2) contains resolve(df2, "c1 = 1"))
-    // Need to evaluate filters that are not pushed down.
-    assert(getPhysicalFilters(df2) contains resolve(df2, "(p1 + c2) = 2"))
+    assert(!(getPhysicalFilters(df) contains resolve(df, "p1 = 1")))
   }
 
   test("bucketed table") {
@@ -279,7 +275,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
   }
 
   test("Locality support for FileScanRDD") {
-    val partition = FilePartition(0, Array(
+    val partition = FilePartition(0, Seq(
       PartitionedFile(InternalRow.empty, "fakePath0", 0, 10, Array("host0", "host1")),
       PartitionedFile(InternalRow.empty, "fakePath0", 10, 20, Array("host1", "host2")),
       PartitionedFile(InternalRow.empty, "fakePath1", 0, 5, Array("host3")),
@@ -401,7 +397,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
           sparkSession = spark,
           rootPathsSpecified = Seq(new Path(tempDir)),
           parameters = Map.empty[String, String],
-          userSpecifiedSchema = None)
+          partitionSchema = None)
         // This should not fail.
         fileCatalog.listLeafFiles(Seq(new Path(tempDir)))
 
@@ -414,30 +410,24 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
   }
 
   test("[SPARK-16818] partition pruned file scans implement sameResult correctly") {
-    Seq("orc", "").foreach { useV1ReaderList =>
-      withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> useV1ReaderList) {
-        withTempPath { path =>
-          val tempDir = path.getCanonicalPath
-          spark.range(100)
-            .selectExpr("id", "id as b")
-            .write
-            .partitionBy("id")
-            .orc(tempDir)
-          val df = spark.read.orc(tempDir)
-
-          def getPlan(df: DataFrame): SparkPlan = {
-            df.queryExecution.executedPlan
-          }
-
-          assert(getPlan(df.where("id = 2")).sameResult(getPlan(df.where("id = 2"))))
-          assert(!getPlan(df.where("id = 2")).sameResult(getPlan(df.where("id = 3"))))
-        }
+    withTempPath { path =>
+      val tempDir = path.getCanonicalPath
+      spark.range(100)
+        .selectExpr("id", "id as b")
+        .write
+        .partitionBy("id")
+        .parquet(tempDir)
+      val df = spark.read.parquet(tempDir)
+      def getPlan(df: DataFrame): SparkPlan = {
+        df.queryExecution.executedPlan
       }
+      assert(getPlan(df.where("id = 2")).sameResult(getPlan(df.where("id = 2"))))
+      assert(!getPlan(df.where("id = 2")).sameResult(getPlan(df.where("id = 3"))))
     }
   }
 
   test("[SPARK-16818] exchange reuse respects differences in partition pruning") {
-    spark.conf.set(SQLConf.EXCHANGE_REUSE_ENABLED.key, true)
+    spark.conf.set("spark.sql.exchange.reuse", true)
     withTempPath { path =>
       val tempDir = path.getCanonicalPath
       spark.range(10)
@@ -562,7 +552,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
 
     if (buckets > 0) {
       val bucketed = df.queryExecution.analyzed transform {
-        case l @ LogicalRelation(r: HadoopFsRelation, _, _, _) =>
+        case l @ LogicalRelation(r: HadoopFsRelation, _, _) =>
           l.copy(relation =
             r.copy(bucketSpec =
               Some(BucketSpec(numBuckets = buckets, "c1" :: Nil, Nil)))(r.sparkSession))
@@ -620,7 +610,7 @@ class TestFileFormat extends TextBasedFileFormat {
       job: Job,
       options: Map[String, String],
       dataSchema: StructType): OutputWriterFactory = {
-    throw new UnsupportedOperationException("JUST FOR TESTING")
+    throw new NotImplementedError("JUST FOR TESTING")
   }
 
   override def buildReader(

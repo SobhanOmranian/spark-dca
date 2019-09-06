@@ -101,7 +101,7 @@ public class RetryingBlockFetcher {
 
   public RetryingBlockFetcher(
       TransportConf conf,
-      RetryingBlockFetcher.BlockFetchStarter fetchStarter,
+      BlockFetchStarter fetchStarter,
       String[] blockIds,
       BlockFetchingListener listener) {
     this.fetchStarter = fetchStarter;

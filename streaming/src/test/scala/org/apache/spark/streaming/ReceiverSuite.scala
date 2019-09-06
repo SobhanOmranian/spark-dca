@@ -19,17 +19,16 @@ package org.apache.spark.streaming
 
 import java.io.File
 import java.nio.ByteBuffer
-import java.util.concurrent.{Semaphore, TimeUnit}
+import java.util.concurrent.Semaphore
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-import org.scalatest.concurrent.{Signaler, ThreadSignaler, TimeLimits}
 import org.scalatest.concurrent.Eventually._
+import org.scalatest.concurrent.Timeouts
 import org.scalatest.time.SpanSugar._
 
 import org.apache.spark.SparkConf
-import org.apache.spark.internal.config.UI._
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.storage.StreamBlockId
 import org.apache.spark.streaming.receiver._
@@ -37,10 +36,7 @@ import org.apache.spark.streaming.receiver.WriteAheadLogBasedBlockHandler._
 import org.apache.spark.util.Utils
 
 /** Testsuite for testing the network receiver behavior */
-class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
-
-  // Necessary to make ScalaTest 3.x interrupt a thread on the JVM like ScalaTest 2.2.x
-  implicit val signaler: Signaler = ThreadSignaler
+class ReceiverSuite extends TestSuiteBase with Timeouts with Serializable {
 
   test("receiver life cycle") {
 
@@ -64,7 +60,7 @@ class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
 
     // Verify that the receiver
     intercept[Exception] {
-      failAfter(200.milliseconds) {
+      failAfter(200 millis) {
         executingThread.join()
       }
     }
@@ -78,7 +74,7 @@ class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
     assert(receiver.isStarted)
     assert(!receiver.isStopped())
     assert(receiver.otherThread.isAlive)
-    eventually(timeout(100.milliseconds), interval(10.milliseconds)) {
+    eventually(timeout(100 millis), interval(10 millis)) {
       assert(receiver.receiving)
     }
 
@@ -106,13 +102,13 @@ class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
     assert(executor.errors.head.eq(exception))
 
     // Verify restarting actually stops and starts the receiver
-    receiver.restart("restarting", null, 600)
-    eventually(timeout(300.milliseconds), interval(10.milliseconds)) {
+    receiver.restart("restarting", null, 100)
+    eventually(timeout(50 millis), interval(10 millis)) {
       // receiver will be stopped async
       assert(receiver.isStopped)
       assert(receiver.onStopCalled)
     }
-    eventually(timeout(1.second), interval(10.milliseconds)) {
+    eventually(timeout(1000 millis), interval(100 millis)) {
       // receiver will be started async
       assert(receiver.onStartCalled)
       assert(executor.isReceiverStarted)
@@ -122,7 +118,7 @@ class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
     }
 
     // Verify that stopping actually stops the thread
-    failAfter(1.second) {
+    failAfter(100 millis) {
       receiver.stop("test")
       assert(receiver.isStopped)
       assert(!receiver.otherThread.isAlive)
@@ -147,10 +143,10 @@ class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
     val generatedData = new ArrayBuffer[Int]
 
     // Generate blocks
-    val startTimeNs = System.nanoTime()
+    val startTime = System.currentTimeMillis()
     blockGenerator.start()
     var count = 0
-    while(System.nanoTime() - startTimeNs < TimeUnit.MILLISECONDS.toNanos(waitTime)) {
+    while(System.currentTimeMillis - startTime < waitTime) {
       blockGenerator.addData(count)
       generatedData += count
       count += 1
@@ -159,7 +155,7 @@ class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
 
     val recordedBlocks = blockGeneratorListener.arrayBuffers
     val recordedData = recordedBlocks.flatten
-    assert(blockGeneratorListener.arrayBuffers.nonEmpty, "No blocks received")
+    assert(blockGeneratorListener.arrayBuffers.size > 0, "No blocks received")
     assert(recordedData.toSet === generatedData.toSet, "Received data not same")
 
     // recordedData size should be close to the expected rate; use an error margin proportional to
@@ -201,7 +197,7 @@ class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
     val sparkConf = new SparkConf()
       .setMaster("local[4]")  // must be at least 3 as we are going to start 2 receivers
       .setAppName(framework)
-      .set(UI_ENABLED, true)
+      .set("spark.ui.enabled", "true")
       .set("spark.streaming.receiver.writeAheadLog.enable", "true")
       .set("spark.streaming.receiver.writeAheadLog.rollingIntervalSecs", "1")
     val batchDuration = Milliseconds(500)
@@ -245,15 +241,15 @@ class ReceiverSuite extends TestSuiteBase with TimeLimits with Serializable {
 
       // Run until sufficient WAL files have been generated and
       // the first WAL files has been deleted
-      eventually(timeout(20.seconds), interval(batchDuration.milliseconds.millis)) {
+      eventually(timeout(20 seconds), interval(batchDuration.milliseconds millis)) {
         val (logFiles1, logFiles2) = getBothCurrentLogFiles()
         allLogFiles1 ++= logFiles1
         allLogFiles2 ++= logFiles2
-        if (allLogFiles1.nonEmpty) {
-          assert(!logFiles1.contains(allLogFiles1.toSeq.min))
+        if (allLogFiles1.size > 0) {
+          assert(!logFiles1.contains(allLogFiles1.toSeq.sorted.head))
         }
-        if (allLogFiles2.nonEmpty) {
-          assert(!logFiles2.contains(allLogFiles2.toSeq.min))
+        if (allLogFiles2.size > 0) {
+          assert(!logFiles2.contains(allLogFiles2.toSeq.sorted.head))
         }
         assert(allLogFiles1.size >= 7)
         assert(allLogFiles2.size >= 7)

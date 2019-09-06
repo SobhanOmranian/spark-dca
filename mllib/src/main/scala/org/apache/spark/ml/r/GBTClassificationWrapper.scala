@@ -78,13 +78,11 @@ private[r] object GBTClassifierWrapper extends MLReadable[GBTClassifierWrapper] 
       seed: String,
       subsamplingRate: Double,
       maxMemoryInMB: Int,
-      cacheNodeIds: Boolean,
-      handleInvalid: String): GBTClassifierWrapper = {
+      cacheNodeIds: Boolean): GBTClassifierWrapper = {
 
     val rFormula = new RFormula()
       .setFormula(formula)
       .setForceIndexLabel(true)
-      .setHandleInvalid(handleInvalid)
     checkDataColumns(rFormula, data)
     val rFormulaModel = rFormula.fit(data)
 

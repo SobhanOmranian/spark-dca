@@ -22,22 +22,23 @@ import java.util.UUID
 
 import scala.collection.mutable.ArrayBuffer
 
-import org.json4s.JsonAST._
-import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods
 import org.json4s.jackson.JsonMethods._
+import org.json4s.JsonAST._
+import org.json4s.JsonDSL._
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.{FunctionIdentifier, InternalRow, TableIdentifier}
-import org.apache.spark.sql.catalyst.catalog._
+import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogStorageFormat, CatalogTable, CatalogTableType, FunctionResource, JarResource}
 import org.apache.spark.sql.catalyst.dsl.expressions.DslString
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
-import org.apache.spark.sql.catalyst.plans.{LeftOuter, NaturalJoin, SQLHelper}
-import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.FunctionIdentifier
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.plans.{LeftOuter, NaturalJoin}
+import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, Union}
 import org.apache.spark.sql.catalyst.plans.physical.{IdentityBroadcastMode, RoundRobinPartitioning, SinglePartition}
-import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types._
+import org.apache.spark.sql.catalyst.TableIdentifier
+import org.apache.spark.sql.types.{BooleanType, DoubleType, FloatType, IntegerType, Metadata, NullType, StringType, StructField, StructType}
 import org.apache.spark.storage.StorageLevel
 
 case class Dummy(optKey: Option[Expression]) extends Expression with CodegenFallback {
@@ -82,12 +83,7 @@ case class SelfReferenceUDF(
   def apply(key: String): Boolean = config.contains(key)
 }
 
-case class FakeLeafPlan(child: LogicalPlan)
-  extends org.apache.spark.sql.catalyst.plans.logical.LeafNode {
-  override def output: Seq[Attribute] = child.output
-}
-
-class TreeNodeSuite extends SparkFunSuite with SQLHelper {
+class TreeNodeSuite extends SparkFunSuite {
   test("top node changed") {
     val after = Literal(1) transform { case Literal(1, _) => Literal(2) }
     assert(after === Literal(2))
@@ -440,22 +436,21 @@ class TreeNodeSuite extends SparkFunSuite with SQLHelper {
         "bucketColumnNames" -> "[bucket]",
         "sortColumnNames" -> "[sort]"))
 
+    // Converts FrameBoundary to JSON
+    assertJSON(
+      ValueFollowing(3),
+      JObject(
+        "product-class" -> classOf[ValueFollowing].getName,
+        "value" -> 3))
+
     // Converts WindowFrame to JSON
     assertJSON(
-      SpecifiedWindowFrame(RowFrame, UnboundedPreceding, CurrentRow),
-      List(
-        JObject(
-          "class" -> classOf[SpecifiedWindowFrame].getName,
-          "num-children" -> 2,
-          "frameType" -> JObject("object" -> JString(RowFrame.getClass.getName)),
-          "lower" -> 0,
-          "upper" -> 1),
-        JObject(
-          "class" -> UnboundedPreceding.getClass.getName,
-          "num-children" -> 0),
-        JObject(
-          "class" -> CurrentRow.getClass.getName,
-          "num-children" -> 0)))
+      SpecifiedWindowFrame(RowFrame, UnboundedFollowing, CurrentRow),
+      JObject(
+        "product-class" -> classOf[SpecifiedWindowFrame].getName,
+        "frameType" -> JObject("object" -> JString(RowFrame.getClass.getName)),
+        "frameStart" -> JObject("object" -> JString(UnboundedFollowing.getClass.getName)),
+        "frameEnd" -> JObject("object" -> JString(CurrentRow.getClass.getName))))
 
     // Converts Partitioning to JSON
     assertJSON(
@@ -484,8 +479,7 @@ class TreeNodeSuite extends SparkFunSuite with SQLHelper {
         CatalogTableType.MANAGED,
         CatalogStorageFormat.empty,
         StructType(StructField("a", IntegerType, true) :: Nil),
-        createTime = 0L,
-        createVersion = "2.x"),
+        createTime = 0L),
 
       JObject(
         "product-class" -> classOf[CatalogTable].getName,
@@ -514,12 +508,10 @@ class TreeNodeSuite extends SparkFunSuite with SQLHelper {
         "owner" -> "",
         "createTime" -> 0,
         "lastAccessTime" -> -1,
-        "createVersion" -> "2.x",
         "tracksPartitionsInCatalog" -> false,
         "properties" -> JNull,
         "unsupportedFeatures" -> List.empty[String],
-        "schemaPreservesCase" -> JBool(true),
-        "ignoredProperties" -> JNull))
+        "schemaPreservesCase" -> JBool(true)))
 
     // For unknown case class, returns JNull.
     val bigValue = new Array[Int](10000)
@@ -570,7 +562,7 @@ class TreeNodeSuite extends SparkFunSuite with SQLHelper {
   }
 
   test("toJSON should not throws java.lang.StackOverflowError") {
-    val udf = ScalaUDF(SelfReferenceUDF(), BooleanType, Seq("col1".attr), false :: Nil)
+    val udf = ScalaUDF(SelfReferenceUDF(), BooleanType, Seq("col1".attr))
     // Should not throw java.lang.StackOverflowError
     udf.toJSON
   }
@@ -579,133 +571,5 @@ class TreeNodeSuite extends SparkFunSuite with SQLHelper {
     val left = JsonMethods.parse(leftJson)
     val right = JsonMethods.parse(rightJson)
     assert(left == right)
-  }
-
-  test("transform works on stream of children") {
-    val before = Coalesce(Stream(Literal(1), Literal(2)))
-    // Note it is a bit tricky to exhibit the broken behavior. Basically we want to create the
-    // situation in which the TreeNode.mapChildren function's change detection is not triggered. A
-    // stream's first element is typically materialized, so in order to not trip the TreeNode change
-    // detection logic, we should not change the first element in the sequence.
-    val result = before.transform {
-      case Literal(v: Int, IntegerType) if v != 1 =>
-        Literal(v + 1, IntegerType)
-    }
-    val expected = Coalesce(Stream(Literal(1), Literal(3)))
-    assert(result === expected)
-  }
-
-  test("withNewChildren on stream of children") {
-    val before = Coalesce(Stream(Literal(1), Literal(2)))
-    val result = before.withNewChildren(Stream(Literal(1), Literal(3)))
-    val expected = Coalesce(Stream(Literal(1), Literal(3)))
-    assert(result === expected)
-  }
-
-  test("treeString limits plan length") {
-    withSQLConf(SQLConf.MAX_PLAN_STRING_LENGTH.key -> "200") {
-      val ds = (1 until 20).foldLeft(Literal("TestLiteral"): Expression) { case (treeNode, x) =>
-        Add(Literal(x), treeNode)
-      }
-
-      val planString = ds.treeString
-      logWarning("Plan string: " + planString)
-      assert(planString.endsWith(" more characters"))
-      assert(planString.length <= SQLConf.get.maxPlanStringLength)
-    }
-  }
-
-  test("treeString limit at zero") {
-    withSQLConf(SQLConf.MAX_PLAN_STRING_LENGTH.key -> "0") {
-      val ds = (1 until 2).foldLeft(Literal("TestLiteral"): Expression) { case (treeNode, x) =>
-        Add(Literal(x), treeNode)
-      }
-
-      val planString = ds.treeString
-      assert(planString.startsWith("Truncated plan of"))
-    }
-  }
-
-  test("tags will be carried over after copy & transform") {
-    val tag = TreeNodeTag[String]("test")
-
-    withClue("makeCopy") {
-      val node = Dummy(None)
-      node.setTagValue(tag, "a")
-      val copied = node.makeCopy(Array(Some(Literal(1))))
-      assert(copied.getTagValue(tag) == Some("a"))
-    }
-
-    def checkTransform(
-        sameTypeTransform: Expression => Expression,
-        differentTypeTransform: Expression => Expression): Unit = {
-      val child = Dummy(None)
-      child.setTagValue(tag, "child")
-      val node = Dummy(Some(child))
-      node.setTagValue(tag, "parent")
-
-      val transformed = sameTypeTransform(node)
-      // Both the child and parent keep the tags
-      assert(transformed.getTagValue(tag) == Some("parent"))
-      assert(transformed.children.head.getTagValue(tag) == Some("child"))
-
-      val transformed2 = differentTypeTransform(node)
-      // Both the child and parent keep the tags, even if we transform the node to a new one of
-      // different type.
-      assert(transformed2.getTagValue(tag) == Some("parent"))
-      assert(transformed2.children.head.getTagValue(tag) == Some("child"))
-    }
-
-    withClue("transformDown") {
-      checkTransform(
-        sameTypeTransform = _ transformDown {
-          case Dummy(None) => Dummy(Some(Literal(1)))
-        },
-        differentTypeTransform = _ transformDown {
-          case Dummy(None) => Literal(1)
-
-        })
-    }
-
-    withClue("transformUp") {
-      checkTransform(
-        sameTypeTransform = _ transformUp {
-          case Dummy(None) => Dummy(Some(Literal(1)))
-        },
-        differentTypeTransform = _ transformUp {
-          case Dummy(None) => Literal(1)
-
-        })
-    }
-  }
-
-  test("clone") {
-    def assertDifferentInstance(before: AnyRef, after: AnyRef): Unit = {
-      assert(before.ne(after) && before == after)
-      before.asInstanceOf[TreeNode[_]].children.zip(
-          after.asInstanceOf[TreeNode[_]].children).foreach {
-        case (beforeChild: AnyRef, afterChild: AnyRef) =>
-          assertDifferentInstance(beforeChild, afterChild)
-      }
-    }
-
-    // Empty constructor
-    val rowNumber = RowNumber()
-    assertDifferentInstance(rowNumber, rowNumber.clone())
-
-    // Overridden `makeCopy`
-    val oneRowRelation = OneRowRelation()
-    assertDifferentInstance(oneRowRelation, oneRowRelation.clone())
-
-    // Multi-way operators
-    val intersect =
-      Intersect(oneRowRelation, Union(Seq(oneRowRelation, oneRowRelation)), isAll = false)
-    assertDifferentInstance(intersect, intersect.clone())
-
-    // Leaf node with an inner child
-    val leaf = FakeLeafPlan(intersect)
-    val leafCloned = leaf.clone()
-    assertDifferentInstance(leaf, leafCloned)
-    assert(leaf.child.eq(leafCloned.asInstanceOf[FakeLeafPlan].child))
   }
 }

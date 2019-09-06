@@ -102,18 +102,10 @@ test_that("spark.glm and predict", {
 })
 
 test_that("spark.glm summary", {
-  # prepare dataset
-  Sepal.Length <- c(2.0, 1.5, 1.8, 3.4, 5.1, 1.8, 1.0, 2.3)
-  Sepal.Width <- c(2.1, 2.3, 5.4, 4.7, 3.1, 2.1, 3.1, 5.5)
-  Petal.Length <- c(1.8, 2.1, 7.1, 2.5, 3.7, 6.3, 2.2, 7.2)
-  Species <- c("setosa", "versicolor", "versicolor", "versicolor", "virginica", "virginica",
-               "versicolor", "virginica")
-  dataset <- data.frame(Sepal.Length, Sepal.Width, Petal.Length, Species, stringsAsFactors = TRUE)
-
   # gaussian family
-  training <- suppressWarnings(createDataFrame(dataset))
+  training <- suppressWarnings(createDataFrame(iris))
   stats <- summary(spark.glm(training, Sepal_Width ~ Sepal_Length + Species))
-  rStats <- summary(glm(Sepal.Width ~ Sepal.Length + Species, data = dataset))
+  rStats <- summary(glm(Sepal.Width ~ Sepal.Length + Species, data = iris))
 
   # test summary coefficients return matrix type
   expect_true(class(stats$coefficients) == "matrix")
@@ -134,15 +126,15 @@ test_that("spark.glm summary", {
 
   out <- capture.output(print(stats))
   expect_match(out[2], "Deviance Residuals:")
-  expect_true(any(grepl("AIC: 35.84", out)))
+  expect_true(any(grepl("AIC: 59.22", out)))
 
   # binomial family
-  df <- suppressWarnings(createDataFrame(dataset))
+  df <- suppressWarnings(createDataFrame(iris))
   training <- df[df$Species %in% c("versicolor", "virginica"), ]
   stats <- summary(spark.glm(training, Species ~ Sepal_Length + Sepal_Width,
                              family = binomial(link = "logit")))
 
-  rTraining <- dataset[dataset$Species %in% c("versicolor", "virginica"), ]
+  rTraining <- iris[iris$Species %in% c("versicolor", "virginica"), ]
   rStats <- summary(glm(Species ~ Sepal.Length + Sepal.Width, data = rTraining,
                         family = binomial(link = "logit")))
 
@@ -181,18 +173,10 @@ test_that("spark.glm summary", {
   expect_equal(stats$df.residual, rStats$df.residual)
   expect_equal(stats$aic, rStats$aic)
 
-  # Test spark.glm works with offset
-  training <- suppressWarnings(createDataFrame(dataset))
-  stats <- summary(spark.glm(training, Sepal_Width ~ Sepal_Length + Species,
-                             family = poisson(), offsetCol = "Petal_Length"))
-  rStats <- suppressWarnings(summary(glm(Sepal.Width ~ Sepal.Length + Species,
-                        data = dataset, family = poisson(), offset = dataset$Petal.Length)))
-  expect_true(all(abs(rStats$coefficients - stats$coefficients) < 1e-3))
-
   # Test summary works on base GLM models
-  baseModel <- stats::glm(Sepal.Width ~ Sepal.Length + Species, data = dataset)
+  baseModel <- stats::glm(Sepal.Width ~ Sepal.Length + Species, data = iris)
   baseSummary <- summary(baseModel)
-  expect_true(abs(baseSummary$deviance - 11.84013) < 1e-4)
+  expect_true(abs(baseSummary$deviance - 12.19313) < 1e-4)
 
   # Test spark.glm works with regularization parameter
   data <- as.data.frame(cbind(a1, a2, b))
@@ -308,19 +292,11 @@ test_that("glm and predict", {
 })
 
 test_that("glm summary", {
-  # prepare dataset
-  Sepal.Length <- c(2.0, 1.5, 1.8, 3.4, 5.1, 1.8, 1.0, 2.3)
-  Sepal.Width <- c(2.1, 2.3, 5.4, 4.7, 3.1, 2.1, 3.1, 5.5)
-  Petal.Length <- c(1.8, 2.1, 7.1, 2.5, 3.7, 6.3, 2.2, 7.2)
-  Species <- c("setosa", "versicolor", "versicolor", "versicolor", "virginica", "virginica",
-               "versicolor", "virginica")
-  dataset <- data.frame(Sepal.Length, Sepal.Width, Petal.Length, Species, stringsAsFactors = TRUE)
-
   # gaussian family
-  training <- suppressWarnings(createDataFrame(dataset))
+  training <- suppressWarnings(createDataFrame(iris))
   stats <- summary(glm(Sepal_Width ~ Sepal_Length + Species, data = training))
 
-  rStats <- summary(glm(Sepal.Width ~ Sepal.Length + Species, data = dataset))
+  rStats <- summary(glm(Sepal.Width ~ Sepal.Length + Species, data = iris))
 
   coefs <- stats$coefficients
   rCoefs <- rStats$coefficients
@@ -336,12 +312,12 @@ test_that("glm summary", {
   expect_equal(stats$aic, rStats$aic)
 
   # binomial family
-  df <- suppressWarnings(createDataFrame(dataset))
+  df <- suppressWarnings(createDataFrame(iris))
   training <- df[df$Species %in% c("versicolor", "virginica"), ]
   stats <- summary(glm(Species ~ Sepal_Length + Sepal_Width, data = training,
                        family = binomial(link = "logit")))
 
-  rTraining <- dataset[dataset$Species %in% c("versicolor", "virginica"), ]
+  rTraining <- iris[iris$Species %in% c("versicolor", "virginica"), ]
   rStats <- summary(glm(Species ~ Sepal.Length + Sepal.Width, data = rTraining,
                         family = binomial(link = "logit")))
 
@@ -389,49 +365,6 @@ test_that("glm save/load", {
   expect_true(s2$is.loaded)
 
   unlink(modelPath)
-})
-
-test_that("spark.glm and glm with string encoding", {
-  t <- as.data.frame(Titanic, stringsAsFactors = FALSE)
-  df <- createDataFrame(t)
-
-  # base R
-  rm <- stats::glm(Freq ~ Sex + Age, family = "gaussian", data = t)
-  # spark.glm with default stringIndexerOrderType = "frequencyDesc"
-  sm0 <- spark.glm(df, Freq ~ Sex + Age, family = "gaussian")
-  # spark.glm with stringIndexerOrderType = "alphabetDesc"
-  sm1 <- spark.glm(df, Freq ~ Sex + Age, family = "gaussian",
-                   stringIndexerOrderType = "alphabetDesc")
-  # glm with stringIndexerOrderType = "alphabetDesc"
-  sm2 <- glm(Freq ~ Sex + Age, family = "gaussian", data = df,
-                stringIndexerOrderType = "alphabetDesc")
-
-  rStats <- summary(rm)
-  rCoefs <- rStats$coefficients
-  sStats <- lapply(list(sm0, sm1, sm2), summary)
-  # order by coefficient size since column rendering may be different
-  o <- order(rCoefs[, 1])
-
-  # default encoding does not produce same results as R
-  expect_false(all(abs(rCoefs[o, ] - sStats[[1]]$coefficients[o, ]) < 1e-4))
-
-  # all estimates should be the same as R with stringIndexerOrderType = "alphabetDesc"
-  test <- lapply(sStats[2:3], function(stats) {
-    expect_true(all(abs(rCoefs[o, ] - stats$coefficients[o, ]) < 1e-4))
-    expect_equal(stats$dispersion, rStats$dispersion)
-    expect_equal(stats$null.deviance, rStats$null.deviance)
-    expect_equal(stats$deviance, rStats$deviance)
-    expect_equal(stats$df.null, rStats$df.null)
-    expect_equal(stats$df.residual, rStats$df.residual)
-    expect_equal(stats$aic, rStats$aic)
-  })
-
-  # fitted values should be equal regardless of string encoding
-  rVals <- predict(rm, t)
-  test <- lapply(list(sm0, sm1, sm2), function(sm) {
-    vals <- collect(select(predict(sm, df), "prediction"))
-    expect_true(all(abs(rVals - vals) < 1e-6), rVals - vals)
-  })
 })
 
 test_that("spark.isoreg", {
@@ -529,25 +462,6 @@ test_that("spark.survreg", {
       model <- survival::survreg(formula = survival::Surv(time, status) ~ x + sex, data = rData),
                                  NA)
     expect_equal(predict(model, rData)[[1]], 3.724591, tolerance = 1e-4)
-
-    # Test stringIndexerOrderType
-    rData <- as.data.frame(rData)
-    rData$sex2 <- c("female", "male")[rData$sex + 1]
-    df <- createDataFrame(rData)
-    expect_error(
-      rModel <- survival::survreg(survival::Surv(time, status) ~ x + sex2, rData), NA)
-    rCoefs <- as.numeric(summary(rModel)$table[, 1])
-    model <- spark.survreg(df, Surv(time, status) ~ x + sex2)
-    coefs <- as.vector(summary(model)$coefficients[, 1])
-    o <- order(rCoefs)
-    # stringIndexerOrderType = "frequencyDesc" produces different estimates from R
-    expect_false(all(abs(rCoefs[o] - coefs[o]) < 1e-4))
-
-    # stringIndexerOrderType = "alphabetDesc" produces the same estimates as R
-    model <- spark.survreg(df, Surv(time, status) ~ x + sex2,
-                           stringIndexerOrderType = "alphabetDesc")
-    coefs <- as.vector(summary(model)$coefficients[, 1])
-    expect_true(all(abs(rCoefs[o] - coefs[o]) < 1e-4))
   }
 })
 

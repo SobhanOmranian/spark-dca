@@ -18,7 +18,6 @@ package org.apache.spark.mllib.fpm
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.mllib.util.MLlibTestSparkContext
-import org.apache.spark.mllib.util.TestingUtils._
 
 class AssociationRulesSuite extends SparkFunSuite with MLlibTestSparkContext {
 
@@ -64,7 +63,7 @@ class AssociationRulesSuite extends SparkFunSuite with MLlibTestSparkContext {
        [1] 23
      */
     assert(results1.size === 23)
-    assert(results1.count(rule => rule.confidence ~= 1.0D absTol 1e-6) == 23)
+    assert(results1.count(rule => math.abs(rule.confidence - 1.0D) < 1e-6) == 23)
 
     val results2 = ar
       .setMinConfidence(0)
@@ -85,7 +84,7 @@ class AssociationRulesSuite extends SparkFunSuite with MLlibTestSparkContext {
        [1] 23
      */
     assert(results2.size === 30)
-    assert(results2.count(rule => rule.confidence ~= 1.0D absTol 1e-6) == 23)
+    assert(results2.count(rule => math.abs(rule.confidence - 1.0D) < 1e-6) == 23)
   }
 }
 

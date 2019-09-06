@@ -79,14 +79,12 @@ private[r] object LinearSVCWrapper
       standardization: Boolean,
       threshold: Double,
       weightCol: String,
-      aggregationDepth: Int,
-      handleInvalid: String
+      aggregationDepth: Int
       ): LinearSVCWrapper = {
 
     val rFormula = new RFormula()
       .setFormula(formula)
       .setForceIndexLabel(true)
-      .setHandleInvalid(handleInvalid)
     checkDataColumns(rFormula, data)
     val rFormulaModel = rFormula.fit(data)
 

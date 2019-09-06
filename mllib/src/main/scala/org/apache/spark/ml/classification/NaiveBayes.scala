@@ -25,10 +25,10 @@ import org.apache.spark.ml.linalg._
 import org.apache.spark.ml.param.{DoubleParam, Param, ParamMap, ParamValidators}
 import org.apache.spark.ml.param.shared.HasWeightCol
 import org.apache.spark.ml.util._
-import org.apache.spark.ml.util.Instrumentation.instrumented
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.sql.{Dataset, Row}
 import org.apache.spark.sql.functions.{col, lit}
+import org.apache.spark.sql.types.DoubleType
 
 /**
  * Params for Naive Bayes Classifiers.
@@ -126,12 +126,9 @@ class NaiveBayes @Since("1.5.0") (
    */
   private[spark] def trainWithLabelCheck(
       dataset: Dataset[_],
-      positiveLabel: Boolean): NaiveBayesModel = instrumented { instr =>
-    instr.logPipelineStage(this)
-    instr.logDataset(dataset)
+      positiveLabel: Boolean): NaiveBayesModel = {
     if (positiveLabel && isDefined(thresholds)) {
       val numClasses = getNumClasses(dataset)
-      instr.logNumClasses(numClasses)
       require($(thresholds).length == numClasses, this.getClass.getSimpleName +
         ".train() called with non-matching numClasses and thresholds.length." +
         s" numClasses=$numClasses, but thresholds has length ${$(thresholds).length}")
@@ -146,11 +143,12 @@ class NaiveBayes @Since("1.5.0") (
           requireZeroOneBernoulliValues
         case _ =>
           // This should never happen.
-          throw new IllegalArgumentException(s"Invalid modelType: ${$(modelType)}.")
+          throw new UnknownError(s"Invalid modelType: ${$(modelType)}.")
       }
     }
 
-    instr.logParams(this, labelCol, featuresCol, weightCol, predictionCol, rawPredictionCol,
+    val instr = Instrumentation.create(this, dataset)
+    instr.logParams(labelCol, featuresCol, weightCol, predictionCol, rawPredictionCol,
       probabilityCol, modelType, smoothing, thresholds)
 
     val numFeatures = dataset.select(col($(featuresCol))).head().getAs[Vector](0).size
@@ -162,21 +160,19 @@ class NaiveBayes @Since("1.5.0") (
     // TODO: similar to reduceByKeyLocally to save one stage.
     val aggregated = dataset.select(col($(labelCol)), w, col($(featuresCol))).rdd
       .map { row => (row.getDouble(0), (row.getDouble(1), row.getAs[Vector](2)))
-      }.aggregateByKey[(Double, DenseVector, Long)]((0.0, Vectors.zeros(numFeatures).toDense, 0L))(
+      }.aggregateByKey[(Double, DenseVector)]((0.0, Vectors.zeros(numFeatures).toDense))(
       seqOp = {
-         case ((weightSum, featureSum, count), (weight, features)) =>
+         case ((weightSum: Double, featureSum: DenseVector), (weight, features)) =>
            requireValues(features)
            BLAS.axpy(weight, features, featureSum)
-           (weightSum + weight, featureSum, count + 1)
+           (weightSum + weight, featureSum)
       },
       combOp = {
-         case ((weightSum1, featureSum1, count1), (weightSum2, featureSum2, count2)) =>
+         case ((weightSum1, featureSum1), (weightSum2, featureSum2)) =>
            BLAS.axpy(1.0, featureSum2, featureSum1)
-           (weightSum1 + weightSum2, featureSum1, count1 + count2)
+           (weightSum1 + weightSum2, featureSum1)
       }).collect().sortBy(_._1)
 
-    val numSamples = aggregated.map(_._2._3).sum
-    instr.logNumExamples(numSamples)
     val numLabels = aggregated.length
     instr.logNumClasses(numLabels)
     val numDocuments = aggregated.map(_._2._1).sum
@@ -188,7 +184,7 @@ class NaiveBayes @Since("1.5.0") (
     val lambda = $(smoothing)
     val piLogDenom = math.log(numDocuments + numLabels * lambda)
     var i = 0
-    aggregated.foreach { case (label, (n, sumTermFreqs, _)) =>
+    aggregated.foreach { case (label, (n, sumTermFreqs)) =>
       labelArray(i) = label
       piArray(i) = math.log(n + lambda) - piLogDenom
       val thetaLogDenom = $(modelType) match {
@@ -196,7 +192,7 @@ class NaiveBayes @Since("1.5.0") (
         case Bernoulli => math.log(n + 2.0 * lambda)
         case _ =>
           // This should never happen.
-          throw new IllegalArgumentException(s"Invalid modelType: ${$(modelType)}.")
+          throw new UnknownError(s"Invalid modelType: ${$(modelType)}.")
       }
       var j = 0
       while (j < numFeatures) {
@@ -208,7 +204,9 @@ class NaiveBayes @Since("1.5.0") (
 
     val pi = Vectors.dense(piArray)
     val theta = new DenseMatrix(numLabels, numFeatures, thetaArray, true)
-    new NaiveBayesModel(uid, pi, theta).setOldLabels(labelArray)
+    val model = new NaiveBayesModel(uid, pi, theta).setOldLabels(labelArray)
+    instr.logSuccess(model)
+    model
   }
 
   @Since("1.5.0")
@@ -287,15 +285,15 @@ class NaiveBayesModel private[ml] (
   private lazy val (thetaMinusNegTheta, negThetaSum) = $(modelType) match {
     case Multinomial => (None, None)
     case Bernoulli =>
-      val negTheta = theta.map(value => math.log1p(-math.exp(value)))
+      val negTheta = theta.map(value => math.log(1.0 - math.exp(value)))
       val ones = new DenseVector(Array.fill(theta.numCols) {1.0})
       val thetaMinusNegTheta = theta.map { value =>
-        value - math.log1p(-math.exp(value))
+        value - math.log(1.0 - math.exp(value))
       }
       (Option(thetaMinusNegTheta), Option(negTheta.multiply(ones)))
     case _ =>
       // This should never happen.
-      throw new IllegalArgumentException(s"Invalid modelType: ${$(modelType)}.")
+      throw new UnknownError(s"Invalid modelType: ${$(modelType)}.")
   }
 
   @Since("1.6.0")
@@ -329,7 +327,7 @@ class NaiveBayesModel private[ml] (
         bernoulliCalculation(features)
       case _ =>
         // This should never happen.
-        throw new IllegalArgumentException(s"Invalid modelType: ${$(modelType)}.")
+        throw new UnknownError(s"Invalid modelType: ${$(modelType)}.")
     }
   }
 
@@ -410,7 +408,7 @@ object NaiveBayesModel extends MLReadable[NaiveBayesModel] {
         .head()
       val model = new NaiveBayesModel(metadata.uid, pi, theta)
 
-      metadata.getAndSetParams(model)
+      DefaultParamsReader.getAndSetParams(model, metadata)
       model
     }
   }

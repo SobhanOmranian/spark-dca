@@ -127,12 +127,13 @@ case class AggregateExpression(
   override def foldable: Boolean = false
   override def nullable: Boolean = aggregateFunction.nullable
 
-  @transient
-  override lazy val references: AttributeSet = {
-    mode match {
-      case Partial | Complete => aggregateFunction.references
-      case PartialMerge | Final => AttributeSet(aggregateFunction.aggBufferAttributes)
+  override def references: AttributeSet = {
+    val childReferences = mode match {
+      case Partial | Complete => aggregateFunction.references.toSeq
+      case PartialMerge | Final => aggregateFunction.aggBufferAttributes
     }
+
+    AttributeSet(childReferences)
   }
 
   override def toString: String = {
@@ -159,7 +160,7 @@ case class AggregateExpression(
  * ([[aggBufferAttributes]]) of an aggregation buffer which is used to hold partial aggregate
  * results. At runtime, multiple aggregate functions are evaluated by the same operator using a
  * combined aggregation buffer which concatenates the aggregation buffers of the individual
- * aggregate functions. Please note that aggregate functions should be stateless.
+ * aggregate functions.
  *
  * Code which accepts [[AggregateFunction]] instances should be prepared to handle both types of
  * aggregate functions.
@@ -189,15 +190,17 @@ abstract class AggregateFunction extends Expression {
   def defaultResult: Option[Literal] = None
 
   /**
-   * Creates [[AggregateExpression]] with `isDistinct` flag disabled.
-   *
-   * @see `toAggregateExpression(isDistinct: Boolean)` for detailed description
+   * Wraps this [[AggregateFunction]] in an [[AggregateExpression]] because
+   * [[AggregateExpression]] is the container of an [[AggregateFunction]], aggregation mode,
+   * and the flag indicating if this aggregation is distinct aggregation or not.
+   * An [[AggregateFunction]] should not be used without being wrapped in
+   * an [[AggregateExpression]].
    */
   def toAggregateExpression(): AggregateExpression = toAggregateExpression(isDistinct = false)
 
   /**
-   * Wraps this [[AggregateFunction]] in an [[AggregateExpression]] and sets `isDistinct`
-   * flag of the [[AggregateExpression]] to the given value because
+   * Wraps this [[AggregateFunction]] in an [[AggregateExpression]] and set isDistinct
+   * field of the [[AggregateExpression]] to the given value because
    * [[AggregateExpression]] is the container of an [[AggregateFunction]], aggregation mode,
    * and the flag indicating if this aggregation is distinct aggregation or not.
    * An [[AggregateFunction]] should not be used without being wrapped in
@@ -314,9 +317,6 @@ abstract class ImperativeAggregate extends AggregateFunction with CodegenFallbac
    * Updates its aggregation buffer, located in `mutableAggBuffer`, based on the given `inputRow`.
    *
    * Use `fieldNumber + mutableAggBufferOffset` to access fields of `mutableAggBuffer`.
-   *
-   * Note that, the input row may be produced by unsafe projection and it may not be safe to cache
-   * some fields of the input row, as the values can be changed unexpectedly.
    */
   def update(mutableAggBuffer: InternalRow, inputRow: InternalRow): Unit
 
@@ -326,9 +326,6 @@ abstract class ImperativeAggregate extends AggregateFunction with CodegenFallbac
    *
    * Use `fieldNumber + mutableAggBufferOffset` to access fields of `mutableAggBuffer`.
    * Use `fieldNumber + inputAggBufferOffset` to access fields of `inputAggBuffer`.
-   *
-   * Note that, the input row may be produced by unsafe projection and it may not be safe to cache
-   * some fields of the input row, as the values can be changed unexpectedly.
    */
   def merge(mutableAggBuffer: InternalRow, inputAggBuffer: InternalRow): Unit
 }
@@ -507,12 +504,6 @@ abstract class TypedImperativeAggregate[T] extends ImperativeAggregate {
   /**
    * Generates the final aggregation result value for current key group with the aggregation buffer
    * object.
-   *
-   * Developer note: the only return types accepted by Spark are:
-   *   - primitive types
-   *   - InternalRow and subclasses
-   *   - ArrayData
-   *   - MapData
    *
    * @param buffer aggregation buffer object.
    * @return The aggregation result of current key group

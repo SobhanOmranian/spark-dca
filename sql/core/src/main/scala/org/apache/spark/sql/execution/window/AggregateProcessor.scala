@@ -26,17 +26,17 @@ import org.apache.spark.sql.catalyst.expressions.aggregate._
 
 /**
  * This class prepares and manages the processing of a number of [[AggregateFunction]]s within a
- * single frame. The [[WindowFunctionFrame]] takes care of processing the frame in the correct way
- * that reduces the processing of a [[AggregateWindowFunction]] to processing the underlying
+ * single frame. The [[WindowFunctionFrame]] takes care of processing the frame in the correct way,
+ * this reduces the processing of a [[AggregateWindowFunction]] to processing the underlying
  * [[AggregateFunction]]. All [[AggregateFunction]]s are processed in [[Complete]] mode.
  *
  * [[SizeBasedWindowFunction]]s are initialized in a slightly different way. These functions
- * require the size of the partition processed and this value is exposed to them when
- * the processor is constructed.
+ * require the size of the partition processed, this value is exposed to them when the processor is
+ * constructed.
  *
  * Processing of distinct aggregates is currently not supported.
  *
- * The implementation is split into an object which takes care of construction, and the actual
+ * The implementation is split into an object which takes care of construction, and a the actual
  * processor class.
  */
 private[window] object AggregateProcessor {
@@ -90,7 +90,7 @@ private[window] object AggregateProcessor {
         updateExpressions ++= noOps
         evaluateExpressions += imperative
       case other =>
-        sys.error(s"Unsupported aggregate function: $other")
+        sys.error(s"Unsupported Aggregate Function: $other")
     }
 
     // Create the projections.
@@ -145,16 +145,18 @@ private[window] final class AggregateProcessor(
 
   /** Update the buffer. */
   def update(input: InternalRow): Unit = {
-    updateProjection(join(buffer, input))
+    // TODO(hvanhovell) this sacrifices performance for correctness. We should make sure that
+    // MutableProjection makes copies of the complex input objects it buffer.
+    val copy = input.copy()
+    updateProjection(join(buffer, copy))
     var i = 0
     while (i < numImperatives) {
-      imperatives(i).update(buffer, input)
+      imperatives(i).update(buffer, copy)
       i += 1
     }
   }
 
   /** Evaluate buffer. */
-  def evaluate(target: InternalRow): Unit = {
-    evaluateProjection.target(target)(buffer)
-  }
+  def evaluate(target: InternalRow): Unit =
+  evaluateProjection.target(target)(buffer)
 }

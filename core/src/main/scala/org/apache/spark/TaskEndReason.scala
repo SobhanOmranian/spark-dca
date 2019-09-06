@@ -128,8 +128,7 @@ case class ExceptionFailure(
     fullStackTrace: String,
     private val exceptionWrapper: Option[ThrowableSerializationWrapper],
     accumUpdates: Seq[AccumulableInfo] = Seq.empty,
-    private[spark] var accums: Seq[AccumulatorV2[_, _]] = Nil,
-    private[spark] var metricPeaks: Seq[Long] = Seq.empty)
+    private[spark] var accums: Seq[AccumulatorV2[_, _]] = Nil)
   extends TaskFailedReason {
 
   /**
@@ -151,11 +150,6 @@ case class ExceptionFailure(
 
   private[spark] def withAccums(accums: Seq[AccumulatorV2[_, _]]): ExceptionFailure = {
     this.accums = accums
-    this
-  }
-
-  private[spark] def withMetricPeaks(metricPeaks: Seq[Long]): ExceptionFailure = {
-    this.metricPeaks = metricPeaks
     this
   }
 
@@ -218,16 +212,9 @@ case object TaskResultLost extends TaskFailedReason {
  * Task was killed intentionally and needs to be rescheduled.
  */
 @DeveloperApi
-case class TaskKilled(
-    reason: String,
-    accumUpdates: Seq[AccumulableInfo] = Seq.empty,
-    private[spark] val accums: Seq[AccumulatorV2[_, _]] = Nil,
-    metricPeaks: Seq[Long] = Seq.empty)
-  extends TaskFailedReason {
-
+case class TaskKilled(reason: String) extends TaskFailedReason {
   override def toErrorString: String = s"TaskKilled ($reason)"
   override def countTowardsTaskFailures: Boolean = false
-
 }
 
 /**

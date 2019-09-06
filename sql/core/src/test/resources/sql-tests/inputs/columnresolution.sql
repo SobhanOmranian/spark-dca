@@ -14,7 +14,9 @@ SELECT i1 FROM mydb1.t1;
 SELECT t1.i1 FROM t1;
 SELECT t1.i1 FROM mydb1.t1;
 
+-- TODO: Support this scenario
 SELECT mydb1.t1.i1 FROM t1;
+-- TODO: Support this scenario
 SELECT mydb1.t1.i1 FROM mydb1.t1;
 
 USE mydb2;
@@ -22,6 +24,7 @@ SELECT i1 FROM t1;
 SELECT i1 FROM mydb1.t1;
 SELECT t1.i1 FROM t1;
 SELECT t1.i1 FROM mydb1.t1;
+-- TODO: Support this scenario
 SELECT mydb1.t1.i1 FROM mydb1.t1;
 
 -- Scenario: resolve fully qualified table name in star expansion
@@ -31,6 +34,7 @@ SELECT mydb1.t1.* FROM mydb1.t1;
 SELECT t1.* FROM mydb1.t1;
 USE mydb2;
 SELECT t1.* FROM t1;
+-- TODO: Support this scenario
 SELECT mydb1.t1.* FROM mydb1.t1;
 SELECT t1.* FROM mydb1.t1;
 SELECT a.* FROM mydb1.t1 AS a;
@@ -43,17 +47,21 @@ CREATE TABLE t4 USING parquet AS SELECT * FROM VALUES (4,1), (2,1) AS t4(c2, c3)
 
 SELECT * FROM t3 WHERE c1 IN (SELECT c2 FROM t4 WHERE t4.c3 = t3.c2);
 
+-- TODO: Support this scenario
 SELECT * FROM mydb1.t3 WHERE c1 IN
   (SELECT mydb1.t4.c2 FROM mydb1.t4 WHERE mydb1.t4.c3 = mydb1.t3.c2);
 
 -- Scenario: column resolution scenarios in join queries
 SET spark.sql.crossJoin.enabled = true;
 
+-- TODO: Support this scenario
 SELECT mydb1.t1.i1 FROM t1, mydb2.t1;
 
+-- TODO: Support this scenario
 SELECT mydb1.t1.i1 FROM mydb1.t1, mydb2.t1;
 
 USE mydb2;
+-- TODO: Support this scenario
 SELECT mydb1.t1.i1 FROM t1, mydb1.t1;
 SET spark.sql.crossJoin.enabled = false;
 
@@ -67,10 +75,12 @@ SELECT t5.t5.i1 FROM mydb1.t5;
 SELECT t5.i1 FROM mydb1.t5;
 SELECT t5.* FROM mydb1.t5;
 SELECT t5.t5.* FROM mydb1.t5;
+-- TODO: Support this scenario
 SELECT mydb1.t5.t5.i1 FROM mydb1.t5;
+-- TODO: Support this scenario
 SELECT mydb1.t5.t5.i2 FROM mydb1.t5;
+-- TODO: Support this scenario
 SELECT mydb1.t5.* FROM mydb1.t5;
-SELECT mydb1.t5.* FROM t5;
 
 -- Cleanup and Reset
 USE default;

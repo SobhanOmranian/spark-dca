@@ -18,6 +18,8 @@
 package org.apache.spark
 
 /**
+ * :: Experimental ::
+ *
  * Support for approximate results. This provides convenient api and also implementation for
  * approximate calculation.
  *

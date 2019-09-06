@@ -29,19 +29,15 @@ import org.json4s.JsonAST.JValue
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 
-import org.apache.spark.annotation.Evolving
-import org.apache.spark.sql.streaming.SinkProgress.DEFAULT_NUM_OUTPUT_ROWS
+import org.apache.spark.annotation.InterfaceStability
 
 /**
  * Information about updates made to stateful operators in a [[StreamingQuery]] during a trigger.
  */
-@Evolving
+@InterfaceStability.Evolving
 class StateOperatorProgress private[sql](
     val numRowsTotal: Long,
-    val numRowsUpdated: Long,
-    val memoryUsedBytes: Long,
-    val customMetrics: ju.Map[String, JLong] = new ju.HashMap()
-  ) extends Serializable {
+    val numRowsUpdated: Long) extends Serializable {
 
   /** The compact JSON representation of this progress. */
   def json: String = compact(render(jsonValue))
@@ -49,21 +45,9 @@ class StateOperatorProgress private[sql](
   /** The pretty (i.e. indented) JSON representation of this progress. */
   def prettyJson: String = pretty(render(jsonValue))
 
-  private[sql] def copy(newNumRowsUpdated: Long): StateOperatorProgress =
-    new StateOperatorProgress(numRowsTotal, newNumRowsUpdated, memoryUsedBytes, customMetrics)
-
   private[sql] def jsonValue: JValue = {
     ("numRowsTotal" -> JInt(numRowsTotal)) ~
-    ("numRowsUpdated" -> JInt(numRowsUpdated)) ~
-    ("memoryUsedBytes" -> JInt(memoryUsedBytes)) ~
-    ("customMetrics" -> {
-      if (!customMetrics.isEmpty) {
-        val keys = customMetrics.keySet.asScala.toSeq.sorted
-        keys.map { k => k -> JInt(customMetrics.get(k).toLong) : JObject }.reduce(_ ~ _)
-      } else {
-        JNothing
-      }
-    })
+    ("numRowsUpdated" -> JInt(numRowsUpdated))
   }
 
   override def toString: String = prettyJson
@@ -95,7 +79,7 @@ class StateOperatorProgress private[sql](
  * @param sources detailed statistics on data being read from each of the streaming sources.
  * @since 2.1.0
  */
-@Evolving
+@InterfaceStability.Evolving
 class StreamingQueryProgress private[sql](
   val id: UUID,
   val runId: UUID,
@@ -141,7 +125,6 @@ class StreamingQueryProgress private[sql](
     ("runId" -> JString(runId.toString)) ~
     ("name" -> JString(name)) ~
     ("timestamp" -> JString(timestamp)) ~
-    ("batchId" -> JInt(batchId)) ~
     ("numInputRows" -> JInt(numInputRows)) ~
     ("inputRowsPerSecond" -> safeDoubleToJValue(inputRowsPerSecond)) ~
     ("processedRowsPerSecond" -> safeDoubleToJValue(processedRowsPerSecond)) ~
@@ -162,11 +145,11 @@ class StreamingQueryProgress private[sql](
  * @param endOffset              The ending offset for data being read.
  * @param numInputRows           The number of records read from this source.
  * @param inputRowsPerSecond     The rate at which data is arriving from this source.
- * @param processedRowsPerSecond The rate at which data from this source is being processed by
+ * @param processedRowsPerSecond The rate at which data from this source is being procressed by
  *                               Spark.
  * @since 2.1.0
  */
-@Evolving
+@InterfaceStability.Evolving
 class SourceProgress protected[sql](
   val description: String,
   val startOffset: String,
@@ -208,19 +191,11 @@ class SourceProgress protected[sql](
  * during a trigger. See [[StreamingQueryProgress]] for more information.
  *
  * @param description Description of the source corresponding to this status.
- * @param numOutputRows Number of rows written to the sink or -1 for Continuous Mode (temporarily)
- * or Sink V1 (until decommissioned).
  * @since 2.1.0
  */
-@Evolving
+@InterfaceStability.Evolving
 class SinkProgress protected[sql](
-    val description: String,
-    val numOutputRows: Long) extends Serializable {
-
-  /** SinkProgress without custom metrics. */
-  protected[sql] def this(description: String) {
-    this(description, DEFAULT_NUM_OUTPUT_ROWS)
-  }
+    val description: String) extends Serializable {
 
   /** The compact JSON representation of this progress. */
   def json: String = compact(render(jsonValue))
@@ -231,14 +206,6 @@ class SinkProgress protected[sql](
   override def toString: String = prettyJson
 
   private[sql] def jsonValue: JValue = {
-    ("description" -> JString(description)) ~
-      ("numOutputRows" -> JInt(numOutputRows))
+    ("description" -> JString(description))
   }
-}
-
-private[sql] object SinkProgress {
-  val DEFAULT_NUM_OUTPUT_ROWS: Long = -1L
-
-  def apply(description: String, numOutputRows: Option[Long]): SinkProgress =
-    new SinkProgress(description, numOutputRows.getOrElse(DEFAULT_NUM_OUTPUT_ROWS))
 }

@@ -58,6 +58,13 @@ abstract class SubqueryExpression(
         children.zip(p.children).forall(p => p._1.semanticEquals(p._2))
     case _ => false
   }
+  def canonicalize(attrs: AttributeSeq): SubqueryExpression = {
+    // Normalize the outer references in the subquery plan.
+    val normalizedPlan = plan.transformAllExpressions {
+      case OuterReference(r) => OuterReference(QueryPlan.normalizeExprId(r, attrs))
+    }
+    withNewPlan(normalizedPlan).canonicalized.asInstanceOf[SubqueryExpression]
+  }
 }
 
 object SubqueryExpression {
@@ -82,16 +89,6 @@ object SubqueryExpression {
       case _ => false
     }.isDefined
   }
-
-  /**
-   * Returns true when an expression contains a subquery
-   */
-  def hasSubquery(e: Expression): Boolean = {
-    e.find {
-      case _: SubqueryExpression => true
-      case _ => false
-    }.isDefined
-  }
 }
 
 object SubExprUtils extends PredicateHelper {
@@ -110,10 +107,10 @@ object SubExprUtils extends PredicateHelper {
   def hasNullAwarePredicateWithinNot(condition: Expression): Boolean = {
     splitConjunctivePredicates(condition).exists {
       case _: Exists | Not(_: Exists) => false
-      case _: InSubquery | Not(_: InSubquery) => false
+      case In(_, Seq(_: ListQuery)) | Not(In(_, Seq(_: ListQuery))) => false
       case e => e.find { x =>
         x.isInstanceOf[Not] && e.find {
-          case _: InSubquery => true
+          case In(_, Seq(_: ListQuery)) => true
           case _ => false
         }.isDefined
       }.isDefined
@@ -241,10 +238,7 @@ case class ScalarSubquery(
     children: Seq[Expression] = Seq.empty,
     exprId: ExprId = NamedExpression.newExprId)
   extends SubqueryExpression(plan, children, exprId) with Unevaluable {
-  override def dataType: DataType = {
-    assert(plan.schema.fields.nonEmpty, "Scalar subquery should have only one column")
-    plan.schema.fields.head.dataType
-  }
+  override def dataType: DataType = plan.schema.fields.head.dataType
   override def nullable: Boolean = true
   override def withNewPlan(plan: LogicalPlan): ScalarSubquery = copy(plan = plan)
   override def toString: String = s"scalar-subquery#${exprId.id} $conditionString"
@@ -280,15 +274,9 @@ object ScalarSubquery {
 case class ListQuery(
     plan: LogicalPlan,
     children: Seq[Expression] = Seq.empty,
-    exprId: ExprId = NamedExpression.newExprId,
-    childOutputs: Seq[Attribute] = Seq.empty)
+    exprId: ExprId = NamedExpression.newExprId)
   extends SubqueryExpression(plan, children, exprId) with Unevaluable {
-  override def dataType: DataType = if (childOutputs.length > 1) {
-    childOutputs.toStructType
-  } else {
-    childOutputs.head.dataType
-  }
-  override lazy val resolved: Boolean = childrenResolved && plan.resolved && childOutputs.nonEmpty
+  override def dataType: DataType = plan.schema.fields.head.dataType
   override def nullable: Boolean = false
   override def withNewPlan(plan: LogicalPlan): ListQuery = copy(plan = plan)
   override def toString: String = s"list#${exprId.id} $conditionString"
@@ -296,8 +284,7 @@ case class ListQuery(
     ListQuery(
       plan.canonicalized,
       children.map(_.canonicalized),
-      ExprId(0),
-      childOutputs.map(_.canonicalized.asInstanceOf[Attribute]))
+      ExprId(0))
   }
 }
 

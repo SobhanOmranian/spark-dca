@@ -24,7 +24,6 @@ import scala.reflect.ClassTag
 import com.google.common.io.ByteStreams
 import org.apache.hadoop.fs.Path
 
-import org.apache.spark.internal.config.UI._
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.rdd._
 import org.apache.spark.storage.{BlockId, StorageLevel, TestBlockId}
@@ -115,7 +114,7 @@ trait RDDCheckpointTester { self: SparkFunSuite =>
    * RDDs partitions. So even if the parent RDD is checkpointed and its partitions changed,
    * the generated RDD will remember the partitions and therefore potentially the whole lineage.
    * This function should be called only those RDD whose partitions refer to parent RDD's
-   * partitions (i.e., do not call it on simple RDDs).
+   * partitions (i.e., do not call it on simple RDD like MappedRDD).
    *
    * @param op an operation to run on the RDD
    * @param reliableCheckpoint if true, use reliable checkpoints, otherwise use local checkpoints
@@ -389,7 +388,7 @@ class CheckpointSuite extends SparkFunSuite with RDDCheckpointTester with LocalS
     // the parent RDD has been checkpointed and parent partitions have been changed.
     // Note that this test is very specific to the current implementation of CartesianRDD.
     val ones = sc.makeRDD(1 to 100, 10).map(x => x)
-    checkpoint(ones, reliableCheckpoint)
+    checkpoint(ones, reliableCheckpoint) // checkpoint that MappedRDD
     val cartesian = new CartesianRDD(sc, ones, ones)
     val splitBeforeCheckpoint =
       serializeDeserialize(cartesian.partitions.head.asInstanceOf[CartesianPartition])
@@ -412,7 +411,7 @@ class CheckpointSuite extends SparkFunSuite with RDDCheckpointTester with LocalS
     // Note that this test is very specific to the current implementation of
     // CoalescedRDDPartitions.
     val ones = sc.makeRDD(1 to 100, 10).map(x => x)
-    checkpoint(ones, reliableCheckpoint)
+    checkpoint(ones, reliableCheckpoint) // checkpoint that MappedRDD
     val coalesced = new CoalescedRDD(ones, 2)
     val splitBeforeCheckpoint =
       serializeDeserialize(coalesced.partitions.head.asInstanceOf[CoalescedRDDPartition])
@@ -511,8 +510,8 @@ class CheckpointSuite extends SparkFunSuite with RDDCheckpointTester with LocalS
     assert(rdd.isCheckpointed === false)
     assert(rdd.isCheckpointedAndMaterialized === false)
     assert(rdd.count() === 0)
-    assert(rdd.isCheckpointed)
-    assert(rdd.isCheckpointedAndMaterialized)
+    assert(rdd.isCheckpointed === true)
+    assert(rdd.isCheckpointedAndMaterialized === true)
     assert(rdd.partitions.size === 0)
   }
 
@@ -531,7 +530,7 @@ class CheckpointSuite extends SparkFunSuite with RDDCheckpointTester with LocalS
       checkpoint(rdd2, reliableCheckpoint)
       rdd2.count()
       assert(rdd1.isCheckpointed === checkpointAllMarkedAncestors)
-      assert(rdd2.isCheckpointed)
+      assert(rdd2.isCheckpointed === true)
     } finally {
       sc.setLocalProperty(RDD.CHECKPOINT_ALL_MARKED_ANCESTORS, null)
     }
@@ -587,10 +586,11 @@ object CheckpointSuite {
 class CheckpointCompressionSuite extends SparkFunSuite with LocalSparkContext {
 
   test("checkpoint compression") {
-    withTempDir { checkpointDir =>
+    val checkpointDir = Utils.createTempDir()
+    try {
       val conf = new SparkConf()
         .set("spark.checkpoint.compress", "true")
-        .set(UI_ENABLED.key, "false")
+        .set("spark.ui.enabled", "false")
       sc = new SparkContext("local", "test", conf)
       sc.setCheckpointDir(checkpointDir.toString)
       val rdd = sc.makeRDD(1 to 20, numSlices = 1)
@@ -616,6 +616,8 @@ class CheckpointCompressionSuite extends SparkFunSuite with LocalSparkContext {
 
       // Verify that the compressed content can be read back
       assert(rdd.collect().toSeq === (1 to 20))
+    } finally {
+      Utils.deleteRecursively(checkpointDir)
     }
   }
 }

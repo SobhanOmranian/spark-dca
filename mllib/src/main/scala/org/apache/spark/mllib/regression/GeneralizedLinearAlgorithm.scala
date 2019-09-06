@@ -366,7 +366,7 @@ abstract class GeneralizedLinearAlgorithm[M <: GeneralizedLinearModel]
 
     // Unpersist cached data
     if (data.getStorageLevel != StorageLevel.NONE) {
-      data.unpersist()
+      data.unpersist(false)
     }
 
     createModel(weights, intercept)

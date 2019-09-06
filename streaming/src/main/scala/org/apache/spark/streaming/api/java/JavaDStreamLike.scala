@@ -153,7 +153,7 @@ trait JavaDStreamLike[T, This <: JavaDStreamLike[T, This, R], R <: JavaRDDLike[T
   def context(): StreamingContext = dstream.context
 
   /** Return a new DStream by applying a function to all elements of this DStream. */
-  def map[U](f: JFunction[T, U]): JavaDStream[U] = {
+  def map[R](f: JFunction[T, R]): JavaDStream[R] = {
     new JavaDStream(dstream.map(f)(fakeClassTag))(fakeClassTag)
   }
 

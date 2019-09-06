@@ -34,7 +34,7 @@ public final class OneWayMessage extends AbstractMessage implements RequestMessa
   }
 
   @Override
-  public Message.Type type() { return Type.OneWayMessage; }
+  public Type type() { return Type.OneWayMessage; }
 
   @Override
   public int encodedLength() {

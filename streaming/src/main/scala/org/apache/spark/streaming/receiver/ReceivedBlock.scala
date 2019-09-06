@@ -20,6 +20,7 @@ package org.apache.spark.streaming.receiver
 import java.nio.ByteBuffer
 
 import scala.collection.mutable.ArrayBuffer
+import scala.language.existentials
 
 /** Trait representing a received block */
 private[streaming] sealed trait ReceivedBlock

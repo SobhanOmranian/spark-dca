@@ -18,8 +18,7 @@ package org.apache.spark.sql.catalyst.parser
 
 import org.antlr.v4.runtime._
 import org.antlr.v4.runtime.atn.PredictionMode
-import org.antlr.v4.runtime.misc.{Interval, ParseCancellationException}
-import org.antlr.v4.runtime.tree.TerminalNodeImpl
+import org.antlr.v4.runtime.misc.ParseCancellationException
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.AnalysisException
@@ -57,19 +56,12 @@ abstract class AbstractSqlParser extends ParserInterface with Logging {
     }
   }
 
-  /** Creates a multi-part identifier for a given SQL string */
-  override def parseMultipartIdentifier(sqlText: String): Seq[String] = {
-    parse(sqlText) { parser =>
-      astBuilder.visitSingleMultipartIdentifier(parser.singleMultipartIdentifier())
-    }
-  }
-
   /**
    * Creates StructType for a given SQL string, which is a comma separated list of field
    * definitions which will preserve the correct Hive metadata.
    */
   override def parseTableSchema(sqlText: String): StructType = parse(sqlText) { parser =>
-    astBuilder.visitSingleTableSchema(parser.singleTableSchema())
+    StructType(astBuilder.visitColTypeList(parser.colTypeList()))
   }
 
   /** Creates LogicalPlan for a given SQL string. */
@@ -86,21 +78,17 @@ abstract class AbstractSqlParser extends ParserInterface with Logging {
   protected def astBuilder: AstBuilder
 
   protected def parse[T](command: String)(toResult: SqlBaseParser => T): T = {
-    logDebug(s"Parsing command: $command")
+    logInfo(s"Parsing command: $command")
 
-    val lexer = new SqlBaseLexer(new UpperCaseCharStream(CharStreams.fromString(command)))
+    val lexer = new SqlBaseLexer(new ANTLRNoCaseStringStream(command))
     lexer.removeErrorListeners()
     lexer.addErrorListener(ParseErrorListener)
-    lexer.legacy_setops_precedence_enbled = SQLConf.get.setOpsPrecedenceEnforced
-    lexer.ansi = SQLConf.get.ansiParserEnabled
 
     val tokenStream = new CommonTokenStream(lexer)
     val parser = new SqlBaseParser(tokenStream)
     parser.addParseListener(PostProcessor)
     parser.removeErrorListeners()
     parser.addErrorListener(ParseErrorListener)
-    parser.legacy_setops_precedence_enbled = SQLConf.get.setOpsPrecedenceEnforced
-    parser.ansi = SQLConf.get.ansiParserEnabled
 
     try {
       try {
@@ -111,7 +99,7 @@ abstract class AbstractSqlParser extends ParserInterface with Logging {
       catch {
         case e: ParseCancellationException =>
           // if we fail, parse with LL mode
-          tokenStream.seek(0) // rewind input stream
+          tokenStream.reset() // rewind input stream
           parser.reset()
 
           // Try Again.
@@ -140,7 +128,7 @@ class CatalystSqlParser(conf: SQLConf) extends AbstractSqlParser {
 
 /** For test-only. */
 object CatalystSqlParser extends AbstractSqlParser {
-  val astBuilder = new AstBuilder(SQLConf.get)
+  val astBuilder = new AstBuilder(new SQLConf())
 }
 
 /**
@@ -160,33 +148,12 @@ object CatalystSqlParser extends AbstractSqlParser {
  * the consume() function of the super class ANTLRStringStream. The LA() function is the lookahead
  * function and is purely used for matching lexical rules. This also means that the grammar will
  * only accept capitalized tokens in case it is run from other tools like antlrworks which do not
- * have the UpperCaseCharStream implementation.
+ * have the ANTLRNoCaseStringStream implementation.
  */
 
-private[parser] class UpperCaseCharStream(wrapped: CodePointCharStream) extends CharStream {
-  override def consume(): Unit = wrapped.consume
-  override def getSourceName(): String = wrapped.getSourceName
-  override def index(): Int = wrapped.index
-  override def mark(): Int = wrapped.mark
-  override def release(marker: Int): Unit = wrapped.release(marker)
-  override def seek(where: Int): Unit = wrapped.seek(where)
-  override def size(): Int = wrapped.size
-
-  override def getText(interval: Interval): String = {
-    // ANTLR 4.7's CodePointCharStream implementations have bugs when
-    // getText() is called with an empty stream, or intervals where
-    // the start > end. See
-    // https://github.com/antlr/antlr4/commit/ac9f7530 for one fix
-    // that is not yet in a released ANTLR artifact.
-    if (size() > 0 && (interval.b - interval.a >= 0)) {
-      wrapped.getText(interval)
-    } else {
-      ""
-    }
-  }
-
+private[parser] class ANTLRNoCaseStringStream(input: String) extends ANTLRInputStream(input) {
   override def LA(i: Int): Int = {
-    val la = wrapped.LA(i)
+    val la = super.LA(i)
     if (la == 0 || la == IntStream.EOF) la
     else Character.toUpperCase(la)
   }
@@ -203,17 +170,8 @@ case object ParseErrorListener extends BaseErrorListener {
       charPositionInLine: Int,
       msg: String,
       e: RecognitionException): Unit = {
-    val (start, stop) = offendingSymbol match {
-      case token: CommonToken =>
-        val start = Origin(Some(line), Some(token.getCharPositionInLine))
-        val length = token.getStopIndex - token.getStartIndex + 1
-        val stop = Origin(Some(line), Some(token.getCharPositionInLine + length))
-        (start, stop)
-      case _ =>
-        val start = Origin(Some(line), Some(charPositionInLine))
-        (start, start)
-    }
-    throw new ParseException(None, msg, start, stop)
+    val position = Origin(Some(line), Some(charPositionInLine))
+    throw new ParseException(None, msg, position, position)
   }
 }
 
@@ -265,14 +223,6 @@ class ParseException(
  */
 case object PostProcessor extends SqlBaseBaseListener {
 
-  /** Throws error message when exiting a explicitly captured wrong identifier rule */
-  override def exitErrorIdent(ctx: SqlBaseParser.ErrorIdentContext): Unit = {
-    val ident = ctx.getParent.getText
-
-    throw new ParseException(s"Possibly unquoted identifier $ident detected. " +
-      s"Please consider quoting it with back-quotes as `$ident`", ctx)
-  }
-
   /** Remove the back ticks from an Identifier. */
   override def exitQuotedIdentifier(ctx: SqlBaseParser.QuotedIdentifierContext): Unit = {
     replaceTokenByIdentifier(ctx, 1) { token =>
@@ -294,12 +244,11 @@ case object PostProcessor extends SqlBaseBaseListener {
     val parent = ctx.getParent
     parent.removeLastChild()
     val token = ctx.getChild(0).getPayload.asInstanceOf[Token]
-    val newToken = new CommonToken(
+    parent.addChild(f(new CommonToken(
       new org.antlr.v4.runtime.misc.Pair(token.getTokenSource, token.getInputStream),
       SqlBaseParser.IDENTIFIER,
       token.getChannel,
       token.getStartIndex + stripMargins,
-      token.getStopIndex - stripMargins)
-    parent.addChild(new TerminalNodeImpl(f(newToken)))
+      token.getStopIndex - stripMargins)))
   }
 }

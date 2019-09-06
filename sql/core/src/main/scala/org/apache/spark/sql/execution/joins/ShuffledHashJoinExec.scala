@@ -17,12 +17,10 @@
 
 package org.apache.spark.sql.execution.joins
 
-import java.util.concurrent.TimeUnit._
-
 import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.physical._
 import org.apache.spark.sql.execution.{BinaryExecNode, SparkPlan}
@@ -47,7 +45,7 @@ case class ShuffledHashJoinExec(
     "buildTime" -> SQLMetrics.createTimingMetric(sparkContext, "time to build hash map"))
 
   override def requiredChildDistribution: Seq[Distribution] =
-    HashClusteredDistribution(leftKeys) :: HashClusteredDistribution(rightKeys) :: Nil
+    ClusteredDistribution(leftKeys) :: ClusteredDistribution(rightKeys) :: Nil
 
   private def buildHashedRelation(iter: Iterator[InternalRow]): HashedRelation = {
     val buildDataSize = longMetric("buildDataSize")
@@ -55,10 +53,10 @@ case class ShuffledHashJoinExec(
     val start = System.nanoTime()
     val context = TaskContext.get()
     val relation = HashedRelation(iter, buildKeys, taskMemoryManager = context.taskMemoryManager())
-    buildTime += NANOSECONDS.toMillis(System.nanoTime() - start)
+    buildTime += (System.nanoTime() - start) / 1000000
     buildDataSize += relation.estimatedSize
     // This relation is usually used until the end of task.
-    context.addTaskCompletionListener[Unit](_ => relation.close())
+    context.addTaskCompletionListener(_ => relation.close())
     relation
   }
 

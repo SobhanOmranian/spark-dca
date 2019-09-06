@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets
 import java.util.{ArrayList => JArrayList, List => JList, Map => JMap}
 
 import scala.collection.JavaConverters._
+import scala.language.existentials
 import scala.reflect.ClassTag
 
 import net.razorvine.pickle._
@@ -53,7 +54,6 @@ import org.apache.spark.mllib.tree.model.{DecisionTreeModel, GradientBoostedTree
 import org.apache.spark.mllib.util.{LinearDataGenerator, MLUtils}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
-import org.apache.spark.sql.types.LongType
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.Utils
 
@@ -98,7 +98,7 @@ private[python] class PythonMLLibAPI extends Serializable {
         List(model.weights, model.intercept).map(_.asInstanceOf[Object]).asJava
       }
     } finally {
-      data.rdd.unpersist()
+      data.rdd.unpersist(blocking = false)
     }
   }
 
@@ -336,7 +336,7 @@ private[python] class PythonMLLibAPI extends Serializable {
       val model = isotonicRegressionAlg.run(input)
       List[AnyRef](model.boundaryVector, model.predictionVector).asJava
     } finally {
-      data.rdd.unpersist()
+      data.rdd.unpersist(blocking = false)
     }
   }
 
@@ -366,7 +366,7 @@ private[python] class PythonMLLibAPI extends Serializable {
     try {
       kMeansAlg.run(data.rdd.persist(StorageLevel.MEMORY_AND_DISK))
     } finally {
-      data.rdd.unpersist()
+      data.rdd.unpersist(blocking = false)
     }
   }
 
@@ -411,7 +411,7 @@ private[python] class PythonMLLibAPI extends Serializable {
     try {
       new GaussianMixtureModelWrapper(gmmAlg.run(data.rdd.persist(StorageLevel.MEMORY_AND_DISK)))
     } finally {
-      data.rdd.unpersist()
+      data.rdd.unpersist(blocking = false)
     }
   }
 
@@ -572,7 +572,10 @@ private[python] class PythonMLLibAPI extends Serializable {
       data: JavaRDD[java.lang.Iterable[Any]],
       minSupport: Double,
       numPartitions: Int): FPGrowthModel[Any] = {
-    val fpg = new FPGrowth(minSupport, numPartitions)
+    val fpg = new FPGrowth()
+      .setMinSupport(minSupport)
+      .setNumPartitions(numPartitions)
+
     val model = fpg.run(data.rdd.map(_.asScala.toArray))
     new FPGrowthModelWrapper(model)
   }
@@ -704,7 +707,7 @@ private[python] class PythonMLLibAPI extends Serializable {
       val model = word2vec.fit(dataJRDD.rdd.persist(StorageLevel.MEMORY_AND_DISK_SER))
       new Word2VecModelWrapper(model)
     } finally {
-      dataJRDD.rdd.unpersist()
+      dataJRDD.rdd.unpersist(blocking = false)
     }
   }
 
@@ -742,7 +745,7 @@ private[python] class PythonMLLibAPI extends Serializable {
     try {
       DecisionTree.train(data.rdd.persist(StorageLevel.MEMORY_AND_DISK), strategy)
     } finally {
-      data.rdd.unpersist()
+      data.rdd.unpersist(blocking = false)
     }
   }
 
@@ -783,7 +786,7 @@ private[python] class PythonMLLibAPI extends Serializable {
         RandomForest.trainRegressor(cached, strategy, numTrees, featureSubsetStrategy, intSeed)
       }
     } finally {
-      cached.unpersist()
+      cached.unpersist(blocking = false)
     }
   }
 
@@ -814,7 +817,7 @@ private[python] class PythonMLLibAPI extends Serializable {
     try {
       GradientBoostedTrees.train(cached, boostingStrategy)
     } finally {
-      cached.unpersist()
+      cached.unpersist(blocking = false)
     }
   }
 
@@ -1143,21 +1146,12 @@ private[python] class PythonMLLibAPI extends Serializable {
     new RowMatrix(rows.rdd, numRows, numCols)
   }
 
-  def createRowMatrix(df: DataFrame, numRows: Long, numCols: Int): RowMatrix = {
-    require(df.schema.length == 1 && df.schema.head.dataType.getClass == classOf[VectorUDT],
-      "DataFrame must have a single vector type column")
-    new RowMatrix(df.rdd.map { case Row(vector: Vector) => vector }, numRows, numCols)
-  }
-
   /**
    * Wrapper around IndexedRowMatrix constructor.
    */
   def createIndexedRowMatrix(rows: DataFrame, numRows: Long, numCols: Int): IndexedRowMatrix = {
     // We use DataFrames for serialization of IndexedRows from Python,
     // so map each Row in the DataFrame back to an IndexedRow.
-    require(rows.schema.length == 2 && rows.schema.head.dataType == LongType &&
-      rows.schema(1).dataType.getClass == classOf[VectorUDT],
-      "DataFrame must consist of a long type index column and a vector type column")
     val indexedRows = rows.rdd.map {
       case Row(index: Long, vector: Vector) => IndexedRow(index, vector)
     }

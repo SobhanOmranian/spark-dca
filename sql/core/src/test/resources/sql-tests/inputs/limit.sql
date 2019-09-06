@@ -1,32 +1,23 @@
 
 -- limit on various data types
-SELECT * FROM testdata LIMIT 2;
-SELECT * FROM arraydata LIMIT 2;
-SELECT * FROM mapdata LIMIT 2;
+select * from testdata limit 2;
+select * from arraydata limit 2;
+select * from mapdata limit 2;
 
 -- foldable non-literal in limit
-SELECT * FROM testdata LIMIT 2 + 1;
+select * from testdata limit 2 + 1;
 
-SELECT * FROM testdata LIMIT CAST(1 AS int);
+select * from testdata limit CAST(1 AS int);
 
 -- limit must be non-negative
-SELECT * FROM testdata LIMIT -1;
-SELECT * FROM testData TABLESAMPLE (-1 ROWS);
-
-
-SELECT * FROM testdata LIMIT CAST(1 AS INT);
--- evaluated limit must not be null
-SELECT * FROM testdata LIMIT CAST(NULL AS INT);
+select * from testdata limit -1;
 
 -- limit must be foldable
-SELECT * FROM testdata LIMIT key > 3;
+select * from testdata limit key > 3;
 
 -- limit must be integer
-SELECT * FROM testdata LIMIT true;
-SELECT * FROM testdata LIMIT 'a';
+select * from testdata limit true;
+select * from testdata limit 'a';
 
 -- limit within a subquery
-SELECT * FROM (SELECT * FROM range(10) LIMIT 5) WHERE id > 3;
-
--- limit ALL
-SELECT * FROM testdata WHERE key < 3 LIMIT ALL;
+select * from (select * from range(10) limit 5) where id > 3;

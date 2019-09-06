@@ -23,6 +23,7 @@ import java.net.Socket
 import java.nio.charset.StandardCharsets
 
 import org.apache.spark.SparkConf
+import org.apache.spark.internal.Logging
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.receiver.Receiver
@@ -62,7 +63,7 @@ object CustomReceiver {
 
 
 class CustomReceiver(host: String, port: Int)
-  extends Receiver[String](StorageLevel.MEMORY_AND_DISK_2) {
+  extends Receiver[String](StorageLevel.MEMORY_AND_DISK_2) with Logging {
 
   def onStart() {
     // Start the thread that receives data over a connection
@@ -81,9 +82,9 @@ class CustomReceiver(host: String, port: Int)
    var socket: Socket = null
    var userInput: String = null
    try {
-     println(s"Connecting to $host : $port")
+     logInfo("Connecting to " + host + ":" + port)
      socket = new Socket(host, port)
-     println(s"Connected to $host : $port")
+     logInfo("Connected to " + host + ":" + port)
      val reader = new BufferedReader(
        new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
      userInput = reader.readLine()
@@ -93,11 +94,11 @@ class CustomReceiver(host: String, port: Int)
      }
      reader.close()
      socket.close()
-     println("Stopped receiving")
+     logInfo("Stopped receiving")
      restart("Trying to connect again")
    } catch {
      case e: java.net.ConnectException =>
-       restart(s"Error connecting to $host : $port", e)
+       restart("Error connecting to " + host + ":" + port, e)
      case t: Throwable =>
        restart("Error receiving data", t)
    }

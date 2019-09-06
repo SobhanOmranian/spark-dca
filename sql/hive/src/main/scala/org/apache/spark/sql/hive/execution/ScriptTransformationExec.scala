@@ -123,7 +123,7 @@ case class ScriptTransformationExec(
 
         var scriptOutputWritable: Writable = null
         val reusedWritableObject: Writable = if (null != outputSerde) {
-          outputSerde.getSerializedClass().getConstructor().newInstance()
+          outputSerde.getSerializedClass().newInstance
         } else {
           null
         }
@@ -308,15 +308,12 @@ private class ScriptTransformationWriterThread(
       }
       threwException = false
     } catch {
-      // SPARK-25158 Exception should not be thrown again, otherwise it will be captured by
-      // SparkUncaughtExceptionHandler, then Executor will exit because of this Uncaught Exception,
-      // so pass the exception to `ScriptTransformationExec` is enough.
       case t: Throwable =>
         // An error occurred while writing input, so kill the child process. According to the
         // Javadoc this call will not throw an exception:
         _exception = t
         proc.destroy()
-        logError("Thread-ScriptTransformation-Feed exit cause by: ", t)
+        throw t
     } finally {
       try {
         Utils.tryLogNonFatalError(outputStream.close())
@@ -407,8 +404,7 @@ case class HiveScriptIOSchema (
       columnTypes: Seq[DataType],
       serdeProps: Seq[(String, String)]): AbstractSerDe = {
 
-    val serde = Utils.classForName[AbstractSerDe](serdeClassName).getConstructor().
-      newInstance()
+    val serde = Utils.classForName(serdeClassName).newInstance.asInstanceOf[AbstractSerDe]
 
     val columnTypesNames = columnTypes.map(_.toTypeInfo.getTypeName()).mkString(",")
 
@@ -416,9 +412,7 @@ case class HiveScriptIOSchema (
     propsMap = propsMap + (serdeConstants.LIST_COLUMN_TYPES -> columnTypesNames)
 
     val properties = new Properties()
-    // Can not use properties.putAll(propsMap.asJava) in scala-2.12
-    // See https://github.com/scala/bug/issues/10418
-    propsMap.foreach { case (k, v) => properties.put(k, v) }
+    properties.putAll(propsMap.asJava)
     serde.initialize(null, properties)
 
     serde
@@ -428,12 +422,9 @@ case class HiveScriptIOSchema (
       inputStream: InputStream,
       conf: Configuration): Option[RecordReader] = {
     recordReaderClass.map { klass =>
-      val instance = Utils.classForName[RecordReader](klass).getConstructor().
-        newInstance()
+      val instance = Utils.classForName(klass).newInstance().asInstanceOf[RecordReader]
       val props = new Properties()
-      // Can not use props.putAll(outputSerdeProps.toMap.asJava) in scala-2.12
-      // See https://github.com/scala/bug/issues/10418
-      outputSerdeProps.toMap.foreach { case (k, v) => props.put(k, v) }
+      props.putAll(outputSerdeProps.toMap.asJava)
       instance.initialize(inputStream, conf, props)
       instance
     }
@@ -441,8 +432,7 @@ case class HiveScriptIOSchema (
 
   def recordWriter(outputStream: OutputStream, conf: Configuration): Option[RecordWriter] = {
     recordWriterClass.map { klass =>
-      val instance = Utils.classForName[RecordWriter](klass).getConstructor().
-        newInstance()
+      val instance = Utils.classForName(klass).newInstance().asInstanceOf[RecordWriter]
       instance.initialize(outputStream, conf)
       instance
     }

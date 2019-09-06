@@ -15,12 +15,12 @@
 # limitations under the License.
 #
 
-import sys
+import warnings
 
 from pyspark import since
 from pyspark.mllib.common import JavaModelWrapper, callMLlibFunc
 from pyspark.sql import SQLContext
-from pyspark.sql.types import StructField, StructType, DoubleType
+from pyspark.sql.types import StructField, StructType, DoubleType, IntegerType, ArrayType
 
 __all__ = ['BinaryClassificationMetrics', 'RegressionMetrics',
            'MulticlassMetrics', 'RankingMetrics']
@@ -30,7 +30,7 @@ class BinaryClassificationMetrics(JavaModelWrapper):
     """
     Evaluator for binary classification.
 
-    :param scoreAndLabels: an RDD of score, label and optional weight.
+    :param scoreAndLabels: an RDD of (score, label) pairs
 
     >>> scoreAndLabels = sc.parallelize([
     ...     (0.1, 0.0), (0.1, 1.0), (0.4, 0.0), (0.6, 0.0), (0.6, 1.0), (0.6, 1.0), (0.8, 1.0)], 2)
@@ -40,14 +40,6 @@ class BinaryClassificationMetrics(JavaModelWrapper):
     >>> metrics.areaUnderPR
     0.83...
     >>> metrics.unpersist()
-    >>> scoreAndLabelsWithOptWeight = sc.parallelize([
-    ...     (0.1, 0.0, 1.0), (0.1, 1.0, 0.4), (0.4, 0.0, 0.2), (0.6, 0.0, 0.6), (0.6, 1.0, 0.9),
-    ...     (0.6, 1.0, 0.5), (0.8, 1.0, 0.7)], 2)
-    >>> metrics = BinaryClassificationMetrics(scoreAndLabelsWithOptWeight)
-    >>> metrics.areaUnderROC
-    0.79...
-    >>> metrics.areaUnderPR
-    0.88...
 
     .. versionadded:: 1.4.0
     """
@@ -55,13 +47,9 @@ class BinaryClassificationMetrics(JavaModelWrapper):
     def __init__(self, scoreAndLabels):
         sc = scoreAndLabels.ctx
         sql_ctx = SQLContext.getOrCreate(sc)
-        numCol = len(scoreAndLabels.first())
-        schema = StructType([
+        df = sql_ctx.createDataFrame(scoreAndLabels, schema=StructType([
             StructField("score", DoubleType(), nullable=False),
-            StructField("label", DoubleType(), nullable=False)])
-        if numCol == 3:
-            schema.add("weight", DoubleType(), False)
-        df = sql_ctx.createDataFrame(scoreAndLabels, schema=schema)
+            StructField("label", DoubleType(), nullable=False)]))
         java_class = sc._jvm.org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
         java_model = java_class(df._jdf)
         super(BinaryClassificationMetrics, self).__init__(java_model)
@@ -95,7 +83,8 @@ class RegressionMetrics(JavaModelWrapper):
     """
     Evaluator for regression.
 
-    :param predictionAndObservations: an RDD of prediction, observation and optional weight.
+    :param predictionAndObservations: an RDD of (prediction,
+                                      observation) pairs.
 
     >>> predictionAndObservations = sc.parallelize([
     ...     (2.5, 3.0), (0.0, -0.5), (2.0, 2.0), (8.0, 7.0)])
@@ -110,11 +99,6 @@ class RegressionMetrics(JavaModelWrapper):
     0.61...
     >>> metrics.r2
     0.94...
-    >>> predictionAndObservationsWithOptWeight = sc.parallelize([
-    ...     (2.5, 3.0, 0.5), (0.0, -0.5, 1.0), (2.0, 2.0, 0.3), (8.0, 7.0, 0.9)])
-    >>> metrics = RegressionMetrics(predictionAndObservationsWithOptWeight)
-    >>> metrics.rootMeanSquaredError
-    0.68...
 
     .. versionadded:: 1.4.0
     """
@@ -122,13 +106,9 @@ class RegressionMetrics(JavaModelWrapper):
     def __init__(self, predictionAndObservations):
         sc = predictionAndObservations.ctx
         sql_ctx = SQLContext.getOrCreate(sc)
-        numCol = len(predictionAndObservations.first())
-        schema = StructType([
+        df = sql_ctx.createDataFrame(predictionAndObservations, schema=StructType([
             StructField("prediction", DoubleType(), nullable=False),
-            StructField("observation", DoubleType(), nullable=False)])
-        if numCol == 3:
-            schema.add("weight", DoubleType(), False)
-        df = sql_ctx.createDataFrame(predictionAndObservations, schema=schema)
+            StructField("observation", DoubleType(), nullable=False)]))
         java_class = sc._jvm.org.apache.spark.mllib.evaluation.RegressionMetrics
         java_model = java_class(df._jdf)
         super(RegressionMetrics, self).__init__(java_model)
@@ -136,9 +116,9 @@ class RegressionMetrics(JavaModelWrapper):
     @property
     @since('1.4.0')
     def explainedVariance(self):
-        r"""
+        """
         Returns the explained variance regression score.
-        explainedVariance = :math:`1 - \frac{variance(y - \hat{y})}{variance(y)}`
+        explainedVariance = 1 - variance(y - \hat{y}) / variance(y)
         """
         return self.call("explainedVariance")
 
@@ -182,39 +162,11 @@ class MulticlassMetrics(JavaModelWrapper):
     """
     Evaluator for multiclass classification.
 
-    :param predictionAndLabels: an RDD of prediction, label and optional weight.
+    :param predictionAndLabels: an RDD of (prediction, label) pairs.
 
     >>> predictionAndLabels = sc.parallelize([(0.0, 0.0), (0.0, 1.0), (0.0, 0.0),
     ...     (1.0, 0.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (2.0, 2.0), (2.0, 0.0)])
     >>> metrics = MulticlassMetrics(predictionAndLabels)
-    >>> metrics.confusionMatrix().toArray()
-    array([[ 2.,  1.,  1.],
-           [ 1.,  3.,  0.],
-           [ 0.,  0.,  1.]])
-    >>> metrics.falsePositiveRate(0.0)
-    0.2...
-    >>> metrics.precision(1.0)
-    0.75...
-    >>> metrics.recall(2.0)
-    1.0...
-    >>> metrics.fMeasure(0.0, 2.0)
-    0.52...
-    >>> metrics.accuracy
-    0.66...
-    >>> metrics.weightedFalsePositiveRate
-    0.19...
-    >>> metrics.weightedPrecision
-    0.68...
-    >>> metrics.weightedRecall
-    0.66...
-    >>> metrics.weightedFMeasure()
-    0.66...
-    >>> metrics.weightedFMeasure(2.0)
-    0.65...
-    >>> predAndLabelsWithOptWeight = sc.parallelize([(0.0, 0.0, 1.0), (0.0, 1.0, 1.0),
-    ...      (0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (1.0, 1.0, 1.0), (1.0, 1.0, 1.0), (1.0, 1.0, 1.0),
-    ...      (2.0, 2.0, 1.0), (2.0, 0.0, 1.0)])
-    >>> metrics = MulticlassMetrics(predAndLabelsWithOptWeight)
     >>> metrics.confusionMatrix().toArray()
     array([[ 2.,  1.,  1.],
            [ 1.,  3.,  0.],
@@ -246,13 +198,9 @@ class MulticlassMetrics(JavaModelWrapper):
     def __init__(self, predictionAndLabels):
         sc = predictionAndLabels.ctx
         sql_ctx = SQLContext.getOrCreate(sc)
-        numCol = len(predictionAndLabels.first())
-        schema = StructType([
+        df = sql_ctx.createDataFrame(predictionAndLabels, schema=StructType([
             StructField("prediction", DoubleType(), nullable=False),
-            StructField("label", DoubleType(), nullable=False)])
-        if numCol == 3:
-            schema.add("weight", DoubleType(), False)
-        df = sql_ctx.createDataFrame(predictionAndLabels, schema)
+            StructField("label", DoubleType(), nullable=False)]))
         java_class = sc._jvm.org.apache.spark.mllib.evaluation.MulticlassMetrics
         java_model = java_class(df._jdf)
         super(MulticlassMetrics, self).__init__(java_model)
@@ -280,28 +228,46 @@ class MulticlassMetrics(JavaModelWrapper):
         return self.call("falsePositiveRate", label)
 
     @since('1.4.0')
-    def precision(self, label):
+    def precision(self, label=None):
         """
-        Returns precision.
+        Returns precision or precision for a given label (category) if specified.
         """
-        return self.call("precision", float(label))
+        if label is None:
+            # note:: Deprecated in 2.0.0. Use accuracy.
+            warnings.warn("Deprecated in 2.0.0. Use accuracy.")
+            return self.call("precision")
+        else:
+            return self.call("precision", float(label))
 
     @since('1.4.0')
-    def recall(self, label):
+    def recall(self, label=None):
         """
-        Returns recall.
+        Returns recall or recall for a given label (category) if specified.
         """
-        return self.call("recall", float(label))
+        if label is None:
+            # note:: Deprecated in 2.0.0. Use accuracy.
+            warnings.warn("Deprecated in 2.0.0. Use accuracy.")
+            return self.call("recall")
+        else:
+            return self.call("recall", float(label))
 
     @since('1.4.0')
-    def fMeasure(self, label, beta=None):
+    def fMeasure(self, label=None, beta=None):
         """
-        Returns f-measure.
+        Returns f-measure or f-measure for a given label (category) if specified.
         """
         if beta is None:
-            return self.call("fMeasure", label)
+            if label is None:
+                # note:: Deprecated in 2.0.0. Use accuracy.
+                warnings.warn("Deprecated in 2.0.0. Use accuracy.")
+                return self.call("fMeasure")
+            else:
+                return self.call("fMeasure", label)
         else:
-            return self.call("fMeasure", label, beta)
+            if label is None:
+                raise Exception("If the beta parameter is specified, label can not be none")
+            else:
+                return self.call("fMeasure", label, beta)
 
     @property
     @since('2.0.0')
@@ -377,20 +343,10 @@ class RankingMetrics(JavaModelWrapper):
     0.17...
     >>> metrics.meanAveragePrecision
     0.35...
-    >>> metrics.meanAveragePrecisionAt(1)
-    0.3333333333333333...
-    >>> metrics.meanAveragePrecisionAt(2)
-    0.25...
     >>> metrics.ndcgAt(3)
     0.33...
     >>> metrics.ndcgAt(10)
     0.48...
-    >>> metrics.recallAt(1)
-    0.06...
-    >>> metrics.recallAt(5)
-    0.35...
-    >>> metrics.recallAt(15)
-    0.66...
 
     .. versionadded:: 1.4.0
     """
@@ -427,15 +383,6 @@ class RankingMetrics(JavaModelWrapper):
         """
         return self.call("meanAveragePrecision")
 
-    @since('3.0.0')
-    def meanAveragePrecisionAt(self, k):
-        """
-        Returns the mean average precision (MAP) at first k ranking of all the queries.
-        If a query has an empty ground truth set, the average precision will be zero and
-        a log warining is generated.
-        """
-        return self.call("meanAveragePrecisionAt", int(k))
-
     @since('1.4.0')
     def ndcgAt(self, k):
         """
@@ -448,20 +395,6 @@ class RankingMetrics(JavaModelWrapper):
         a log warning.
         """
         return self.call("ndcgAt", int(k))
-
-    @since('3.0.0')
-    def recallAt(self, k):
-        """
-        Compute the average recall of all the queries, truncated at ranking position k.
-
-        If for a query, the ranking algorithm returns n results, the recall value
-        will be computed as #(relevant items retrieved) / #(ground truth set).
-        This formula also applies when the size of the ground truth set is less than k.
-
-        If a query has an empty ground truth set, zero will be used as recall together
-        with a log warning.
-        """
-        return self.call("recallAt", int(k))
 
 
 class MultilabelMetrics(JavaModelWrapper):
@@ -598,14 +531,8 @@ class MultilabelMetrics(JavaModelWrapper):
 
 def _test():
     import doctest
-    import numpy
     from pyspark.sql import SparkSession
     import pyspark.mllib.evaluation
-    try:
-        # Numpy 1.14+ changed it's string format.
-        numpy.set_printoptions(legacy='1.13')
-    except TypeError:
-        pass
     globs = pyspark.mllib.evaluation.__dict__.copy()
     spark = SparkSession.builder\
         .master("local[4]")\
@@ -615,7 +542,7 @@ def _test():
     (failure_count, test_count) = doctest.testmod(globs=globs, optionflags=doctest.ELLIPSIS)
     spark.stop()
     if failure_count:
-        sys.exit(-1)
+        exit(-1)
 
 
 if __name__ == "__main__":

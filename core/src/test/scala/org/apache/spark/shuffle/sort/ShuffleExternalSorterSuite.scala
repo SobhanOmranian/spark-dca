@@ -20,12 +20,10 @@ package org.apache.spark.shuffle.sort
 import java.lang.{Long => JLong}
 
 import org.mockito.Mockito.when
-import org.scalatest.mockito.MockitoSugar
+import org.scalatest.mock.MockitoSugar
 
 import org.apache.spark._
 import org.apache.spark.executor.{ShuffleWriteMetrics, TaskMetrics}
-import org.apache.spark.internal.config.MEMORY_FRACTION
-import org.apache.spark.internal.config.Tests._
 import org.apache.spark.memory._
 import org.apache.spark.unsafe.Platform
 
@@ -35,10 +33,9 @@ class ShuffleExternalSorterSuite extends SparkFunSuite with LocalSparkContext wi
     val conf = new SparkConf()
       .setMaster("local[1]")
       .setAppName("ShuffleExternalSorterSuite")
-      .set(IS_TESTING, true)
-      .set(TEST_MEMORY, 1600L)
-      .set(MEMORY_FRACTION, 0.9999)
-
+      .set("spark.testing", "true")
+      .set("spark.testing.memory", "1600")
+      .set("spark.memory.fraction", "1")
     sc = new SparkContext(conf)
 
     val memoryManager = UnifiedMemoryManager(conf, 1)
@@ -92,7 +89,7 @@ class ShuffleExternalSorterSuite extends SparkFunSuite with LocalSparkContext wi
     // trigger a nested spill.
     shouldAllocate = true
 
-    // Should throw `SparkOutOfMemoryError` as there is no enough memory: `ShuffleInMemorySorter`
+    // Should throw `OutOfMemoryError` as there is no enough memory: `ShuffleInMemorySorter`
     // will try to acquire 800 bytes but there are only 400 bytes available.
     //
     // Before the fix, a nested spill may use a released page and this causes two tasks access the
@@ -107,7 +104,7 @@ class ShuffleExternalSorterSuite extends SparkFunSuite with LocalSparkContext wi
     //     at org.apache.spark.memory.TaskMemoryManager.getPage(TaskMemoryManager.java:384)
     // - java.lang.UnsupportedOperationException: Cannot grow BufferHolder by size -536870912
     //     because the size after growing exceeds size limitation 2147483632
-    intercept[SparkOutOfMemoryError] {
+    intercept[OutOfMemoryError] {
       sorter.insertRecord(bytes, Platform.BYTE_ARRAY_OFFSET, 1, 0)
     }
   }

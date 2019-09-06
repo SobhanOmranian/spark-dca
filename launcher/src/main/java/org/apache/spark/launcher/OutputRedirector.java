@@ -34,25 +34,18 @@ class OutputRedirector {
   private final BufferedReader reader;
   private final Logger sink;
   private final Thread thread;
-  private final ChildProcAppHandle callback;
 
   private volatile boolean active;
-  private volatile Throwable error;
 
-  OutputRedirector(InputStream in, String loggerName, ThreadFactory tf) {
-    this(in, loggerName, tf, null);
+  OutputRedirector(InputStream in, ThreadFactory tf) {
+    this(in, OutputRedirector.class.getName(), tf);
   }
 
-  OutputRedirector(
-      InputStream in,
-      String loggerName,
-      ThreadFactory tf,
-      ChildProcAppHandle callback) {
+  OutputRedirector(InputStream in, String loggerName, ThreadFactory tf) {
     this.active = true;
     this.reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
     this.thread = tf.newThread(this::redirect);
     this.sink = Logger.getLogger(loggerName);
-    this.callback = callback;
     thread.start();
   }
 
@@ -62,18 +55,10 @@ class OutputRedirector {
       while ((line = reader.readLine()) != null) {
         if (active) {
           sink.info(line.replaceFirst("\\s*$", ""));
-          if ((containsIgnoreCase(line, "Error") || containsIgnoreCase(line, "Exception")) &&
-              !line.contains("at ")) {
-            error = new RuntimeException(line);
-          }
         }
       }
     } catch (IOException e) {
       sink.log(Level.FINE, "Error reading child process output.", e);
-    } finally {
-      if (callback != null) {
-        callback.monitorChild();
-      }
     }
   }
 
@@ -86,28 +71,4 @@ class OutputRedirector {
     active = false;
   }
 
-  boolean isAlive() {
-    return thread.isAlive();
-  }
-
-  Throwable getError() {
-    return error;
-  }
-
-  /**
-   * Copied from Apache Commons Lang {@code StringUtils#containsIgnoreCase(String, String)}
-   */
-  private static boolean containsIgnoreCase(String str, String searchStr) {
-    if (str == null || searchStr == null) {
-      return false;
-    }
-    int len = searchStr.length();
-    int max = str.length() - len;
-    for (int i = 0; i <= max; i++) {
-      if (str.regionMatches(true, i, searchStr, 0, len)) {
-        return true;
-      }
-    }
-    return false;
-  }
 }

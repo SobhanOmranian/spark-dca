@@ -17,7 +17,6 @@
 
 package org.apache.spark.launcher;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -55,12 +54,10 @@ class Main {
     String className = args.remove(0);
 
     boolean printLaunchCommand = !isEmpty(System.getenv("SPARK_PRINT_LAUNCH_COMMAND"));
-    Map<String, String> env = new HashMap<>();
-    List<String> cmd;
+    AbstractCommandBuilder builder;
     if (className.equals("org.apache.spark.deploy.SparkSubmit")) {
       try {
-        AbstractCommandBuilder builder = new SparkSubmitCommandBuilder(args);
-        cmd = buildCommand(builder, env, printLaunchCommand);
+        builder = new SparkSubmitCommandBuilder(args);
       } catch (IllegalArgumentException e) {
         printLaunchCommand = false;
         System.err.println("Error: " + e.getMessage());
@@ -79,20 +76,22 @@ class Main {
           help.add(parser.className);
         }
         help.add(parser.USAGE_ERROR);
-        AbstractCommandBuilder builder = new SparkSubmitCommandBuilder(help);
-        cmd = buildCommand(builder, env, printLaunchCommand);
+        builder = new SparkSubmitCommandBuilder(help);
       }
     } else {
-      AbstractCommandBuilder builder = new SparkClassCommandBuilder(className, args);
-      cmd = buildCommand(builder, env, printLaunchCommand);
+      builder = new SparkClassCommandBuilder(className, args);
+    }
+
+    Map<String, String> env = new HashMap<>();
+    List<String> cmd = builder.buildCommand(env);
+    if (printLaunchCommand) {
+      System.err.println("Spark Command: " + join(" ", cmd));
+      System.err.println("========================================");
     }
 
     if (isWindows()) {
       System.out.println(prepareWindowsCommand(cmd, env));
     } else {
-      // A sequence of NULL character and newline separates command-strings and others.
-      System.out.println('\0');
-
       // In bash, use NULL as the arg separator since it cannot be used in an argument.
       List<String> bashCmd = prepareBashCommand(cmd, env);
       for (String c : bashCmd) {
@@ -100,22 +99,6 @@ class Main {
         System.out.print('\0');
       }
     }
-  }
-
-  /**
-   * Prepare spark commands with the appropriate command builder.
-   * If printLaunchCommand is set then the commands will be printed to the stderr.
-   */
-  private static List<String> buildCommand(
-      AbstractCommandBuilder builder,
-      Map<String, String> env,
-      boolean printLaunchCommand) throws IOException, IllegalArgumentException {
-    List<String> cmd = builder.buildCommand(env);
-    if (printLaunchCommand) {
-      System.err.println("Spark Command: " + join(" ", cmd));
-      System.err.println("========================================");
-    }
-    return cmd;
   }
 
   /**

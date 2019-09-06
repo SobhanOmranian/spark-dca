@@ -73,10 +73,10 @@ object DecisionTreeRegressionExample {
       .setPredictionCol("prediction")
       .setMetricName("rmse")
     val rmse = evaluator.evaluate(predictions)
-    println(s"Root Mean Squared Error (RMSE) on test data = $rmse")
+    println("Root Mean Squared Error (RMSE) on test data = " + rmse)
 
     val treeModel = model.stages(1).asInstanceOf[DecisionTreeRegressionModel]
-    println(s"Learned regression tree model:\n ${treeModel.toDebugString}")
+    println("Learned regression tree model:\n" + treeModel.toDebugString)
     // $example off$
 
     spark.stop()

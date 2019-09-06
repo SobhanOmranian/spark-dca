@@ -19,27 +19,24 @@ package org.apache.spark.sql.execution.datasources
 
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SaveMode
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 
-class SaveIntoDataSourceCommandSuite extends SharedSparkSession {
+class SaveIntoDataSourceCommandSuite extends SharedSQLContext {
 
   test("simpleString is redacted") {
     val URL = "connection.url"
     val PASS = "mypassword"
     val DRIVER = "mydriver"
 
-    val dataSource = DataSource(
-      sparkSession = spark,
-      className = "jdbc",
-      partitionColumns = Nil,
-      options = Map("password" -> PASS, "url" -> URL, "driver" -> DRIVER))
+    val simpleString = SaveIntoDataSourceCommand(
+      spark.range(1).logicalPlan,
+      "jdbc",
+      Nil,
+      Map("password" -> PASS, "url" -> URL, "driver" -> DRIVER),
+      SaveMode.ErrorIfExists).treeString(true)
 
-    val logicalPlanString = dataSource
-      .planForWriting(SaveMode.ErrorIfExists, spark.range(1).logicalPlan)
-      .treeString(true)
-
-    assert(!logicalPlanString.contains(URL))
-    assert(!logicalPlanString.contains(PASS))
-    assert(logicalPlanString.contains(DRIVER))
+    assert(!simpleString.contains(URL))
+    assert(!simpleString.contains(PASS))
+    assert(simpleString.contains(DRIVER))
   }
 }

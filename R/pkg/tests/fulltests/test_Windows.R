@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
 context("Windows-specific tests")
 
 test_that("sparkJars tag in SparkContext", {

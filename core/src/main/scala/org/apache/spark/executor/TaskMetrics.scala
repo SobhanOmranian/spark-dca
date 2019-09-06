@@ -23,7 +23,6 @@ import scala.collection.mutable.{ArrayBuffer, LinkedHashMap}
 import org.apache.spark._
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.Tests.IS_TESTING
 import org.apache.spark.scheduler.AccumulableInfo
 import org.apache.spark.storage.{BlockId, BlockStatus}
 import org.apache.spark.util._
@@ -113,12 +112,6 @@ class TaskMetrics private[spark] () extends Serializable {
 
   /**
    * Storage statuses of any blocks that have been updated as a result of this task.
-   *
-   * Tracking the _updatedBlockStatuses can use a lot of memory.
-   * It is not used anywhere inside of Spark so we would ideally remove it, but its exposed to
-   * the user in SparkListenerTaskEnd so the api is kept for compatibility.
-   * Tracking can be turned off to save memory via config
-   * TASK_METRICS_TRACK_UPDATED_BLOCK_STATUSES.
    */
   def updatedBlockStatuses: Seq[(BlockId, BlockStatus)] = {
     // This is called on driver. All accumulator updates have a fixed value. So it's safe to use
@@ -203,7 +196,7 @@ class TaskMetrics private[spark] () extends Serializable {
   }
 
   // Only used for test
-  private[spark] val testAccum = sys.props.get(IS_TESTING.key).map(_ => new LongAccumulator)
+  private[spark] val testAccum = sys.props.get("spark.testing").map(_ => new LongAccumulator)
 
 
   import InternalAccumulator._
@@ -222,7 +215,6 @@ class TaskMetrics private[spark] () extends Serializable {
     shuffleRead.REMOTE_BLOCKS_FETCHED -> shuffleReadMetrics._remoteBlocksFetched,
     shuffleRead.LOCAL_BLOCKS_FETCHED -> shuffleReadMetrics._localBlocksFetched,
     shuffleRead.REMOTE_BYTES_READ -> shuffleReadMetrics._remoteBytesRead,
-    shuffleRead.REMOTE_BYTES_READ_TO_DISK -> shuffleReadMetrics._remoteBytesReadToDisk,
     shuffleRead.LOCAL_BYTES_READ -> shuffleReadMetrics._localBytesRead,
     shuffleRead.FETCH_WAIT_TIME -> shuffleReadMetrics._fetchWaitTime,
     shuffleRead.RECORDS_READ -> shuffleReadMetrics._recordsRead,

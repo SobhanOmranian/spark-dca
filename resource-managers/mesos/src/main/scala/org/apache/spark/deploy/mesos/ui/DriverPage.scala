@@ -29,7 +29,8 @@ import org.apache.spark.ui.{UIUtils, WebUIPage}
 private[ui] class DriverPage(parent: MesosClusterUI) extends WebUIPage("driver") {
 
   override def render(request: HttpServletRequest): Seq[Node] = {
-    val driverId = request.getParameter("id")
+    // stripXSS is called first to remove suspicious characters used in XSS attacks
+    val driverId = UIUtils.stripXSS(request.getParameter("id"))
     require(driverId != null && driverId.nonEmpty, "Missing id parameter")
 
     val state = parent.scheduler.getDriverState(driverId)
@@ -38,7 +39,7 @@ private[ui] class DriverPage(parent: MesosClusterUI) extends WebUIPage("driver")
         <div>
           <p>Cannot find driver {driverId}</p>
         </div>
-      return UIUtils.basicSparkPage(request, content, s"Details for Job $driverId")
+      return UIUtils.basicSparkPage(content, s"Details for Job $driverId")
     }
     val driverState = state.get
     val driverHeaders = Seq("Driver property", "Value")
@@ -67,7 +68,7 @@ private[ui] class DriverPage(parent: MesosClusterUI) extends WebUIPage("driver")
         retryHeaders, retryRow, Iterable.apply(driverState.description.retryState))
     val content =
       <p>Driver state information for driver id {driverId}</p>
-        <a href={UIUtils.prependBaseUri(request, "/")}>Back to Drivers</a>
+        <a href={UIUtils.prependBaseUri("/")}>Back to Drivers</a>
         <div class="row-fluid">
           <div class="span12">
             <h4>Driver state: {driverState.state}</h4>
@@ -86,7 +87,7 @@ private[ui] class DriverPage(parent: MesosClusterUI) extends WebUIPage("driver")
           </div>
         </div>;
 
-    UIUtils.basicSparkPage(request, content, s"Details for Job $driverId")
+    UIUtils.basicSparkPage(content, s"Details for Job $driverId")
   }
 
   private def launchedRow(submissionState: Option[MesosClusterSubmissionState]): Seq[Node] = {
@@ -111,7 +112,7 @@ private[ui] class DriverPage(parent: MesosClusterUI) extends WebUIPage("driver")
         <td>Last Task Status</td>
         <td>{state.mesosTaskStatus.map(_.toString).getOrElse("")}</td>
       </tr>
-    }.getOrElse(Seq.empty[Node])
+    }.getOrElse(Seq[Node]())
   }
 
   private def propertiesRow(properties: collection.Map[String, String]): Seq[Node] = {
@@ -174,6 +175,6 @@ private[ui] class DriverPage(parent: MesosClusterUI) extends WebUIPage("driver")
           {state.retries}
         </td>
       </tr>
-    }.getOrElse(Seq.empty[Node])
+    }.getOrElse(Seq[Node]())
   }
 }

@@ -17,8 +17,6 @@
 
 package org.apache.spark.ml.util
 
-import java.util.concurrent.TimeUnit
-
 import scala.collection.mutable
 
 import org.apache.spark.SparkContext
@@ -75,7 +73,7 @@ private[spark] abstract class Stopwatch extends Serializable {
   /**
    * Gets the current time in milliseconds.
    */
-  protected def now: Long = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
+  protected def now: Long = System.currentTimeMillis()
 
   /**
    * Adds input duration to total elapsed time.

@@ -21,10 +21,10 @@ import org.apache.spark.sql.{AnalysisException, QueryTest, Row}
 import org.apache.spark.sql.catalog.Table
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 import org.apache.spark.sql.types.StructType
 
-class GlobalTempViewSuite extends QueryTest with SharedSparkSession {
+class GlobalTempViewSuite extends QueryTest with SharedSQLContext {
   import testImplicits._
 
   override protected def beforeAll(): Unit = {
@@ -36,7 +36,7 @@ class GlobalTempViewSuite extends QueryTest with SharedSparkSession {
 
   test("basic semantic") {
     val expectedErrorMsg = "not found"
-    withGlobalTempView("src") {
+    try {
       sql("CREATE GLOBAL TEMP VIEW src AS SELECT 1, 'a'")
 
       // If there is no database in table name, we should try local temp view first, if not found,
@@ -79,15 +79,19 @@ class GlobalTempViewSuite extends QueryTest with SharedSparkSession {
       // We can also use Dataset API to replace global temp view
       Seq(2 -> "b").toDF("i", "j").createOrReplaceGlobalTempView("src")
       checkAnswer(spark.table(s"$globalTempDB.src"), Row(2, "b"))
+    } finally {
+      spark.catalog.dropGlobalTempView("src")
     }
   }
 
   test("global temp view is shared among all sessions") {
-    withGlobalTempView("src") {
+    try {
       sql("CREATE GLOBAL TEMP VIEW src AS SELECT 1, 2")
       checkAnswer(spark.table(s"$globalTempDB.src"), Row(1, 2))
       val newSession = spark.newSession()
       checkAnswer(newSession.table(s"$globalTempDB.src"), Row(1, 2))
+    } finally {
+      spark.catalog.dropGlobalTempView("src")
     }
   }
 
@@ -101,25 +105,27 @@ class GlobalTempViewSuite extends QueryTest with SharedSparkSession {
 
   test("CREATE GLOBAL TEMP VIEW USING") {
     withTempPath { path =>
-      withGlobalTempView("src") {
+      try {
         Seq(1 -> "a").toDF("i", "j").write.parquet(path.getAbsolutePath)
         sql(s"CREATE GLOBAL TEMP VIEW src USING parquet OPTIONS (PATH '${path.toURI}')")
         checkAnswer(spark.table(s"$globalTempDB.src"), Row(1, "a"))
         sql(s"INSERT INTO $globalTempDB.src SELECT 2, 'b'")
         checkAnswer(spark.table(s"$globalTempDB.src"), Row(1, "a") :: Row(2, "b") :: Nil)
+      } finally {
+        spark.catalog.dropGlobalTempView("src")
       }
     }
   }
 
   test("CREATE TABLE LIKE should work for global temp view") {
-    withTable("cloned") {
-      withGlobalTempView("src") {
-        sql("CREATE GLOBAL TEMP VIEW src AS SELECT 1 AS a, '2' AS b")
-        sql(s"CREATE TABLE cloned LIKE $globalTempDB.src")
-        val tableMeta = spark.sessionState.catalog.getTableMetadata(TableIdentifier("cloned"))
-        assert(tableMeta.schema == new StructType()
-          .add("a", "int", false).add("b", "string", false))
-      }
+    try {
+      sql("CREATE GLOBAL TEMP VIEW src AS SELECT 1 AS a, '2' AS b")
+      sql(s"CREATE TABLE cloned LIKE $globalTempDB.src")
+      val tableMeta = spark.sessionState.catalog.getTableMetadata(TableIdentifier("cloned"))
+      assert(tableMeta.schema == new StructType().add("a", "int", false).add("b", "string", false))
+    } finally {
+      spark.catalog.dropGlobalTempView("src")
+      sql("DROP TABLE default.cloned")
     }
   }
 
@@ -134,31 +140,32 @@ class GlobalTempViewSuite extends QueryTest with SharedSparkSession {
 
       assert(spark.catalog.listTables(globalTempDB).collect().toSeq.map(_.name) == Seq("v1", "v2"))
     } finally {
-      spark.catalog.dropGlobalTempView("v1")
-      spark.catalog.dropTempView("v2")
+      spark.catalog.dropTempView("v1")
+      spark.catalog.dropGlobalTempView("v2")
     }
   }
 
   test("should lookup global temp view if and only if global temp db is specified") {
-    withTempView("same_name") {
-      withGlobalTempView("same_name") {
-        sql("CREATE GLOBAL TEMP VIEW same_name AS SELECT 3, 4")
-        sql("CREATE TEMP VIEW same_name AS SELECT 1, 2")
+    try {
+      sql("CREATE GLOBAL TEMP VIEW same_name AS SELECT 3, 4")
+      sql("CREATE TEMP VIEW same_name AS SELECT 1, 2")
 
-        checkAnswer(sql("SELECT * FROM same_name"), Row(1, 2))
+      checkAnswer(sql("SELECT * FROM same_name"), Row(1, 2))
 
-        // we never lookup global temp views if database is not specified in table name
-        spark.catalog.dropTempView("same_name")
-        intercept[AnalysisException](sql("SELECT * FROM same_name"))
+      // we never lookup global temp views if database is not specified in table name
+      spark.catalog.dropTempView("same_name")
+      intercept[AnalysisException](sql("SELECT * FROM same_name"))
 
-        // Use qualified name to lookup a global temp view.
-        checkAnswer(sql(s"SELECT * FROM $globalTempDB.same_name"), Row(3, 4))
-      }
+      // Use qualified name to lookup a global temp view.
+      checkAnswer(sql(s"SELECT * FROM $globalTempDB.same_name"), Row(3, 4))
+    } finally {
+      spark.catalog.dropTempView("same_name")
+      spark.catalog.dropGlobalTempView("same_name")
     }
   }
 
   test("public Catalog should recognize global temp view") {
-    withGlobalTempView("src")  {
+    try {
       sql("CREATE GLOBAL TEMP VIEW src AS SELECT 1, 2")
 
       assert(spark.catalog.tableExists(globalTempDB, "src"))
@@ -168,6 +175,8 @@ class GlobalTempViewSuite extends QueryTest with SharedSparkSession {
         description = null,
         tableType = "TEMPORARY",
         isTemporary = true).toString)
+    } finally {
+      spark.catalog.dropGlobalTempView("src")
     }
   }
 }

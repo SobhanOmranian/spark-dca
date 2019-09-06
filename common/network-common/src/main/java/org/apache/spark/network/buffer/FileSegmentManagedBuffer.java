@@ -24,7 +24,6 @@ import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.StandardOpenOption;
 
 import com.google.common.base.Objects;
 import com.google.common.io.ByteStreams;
@@ -77,16 +76,16 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
         return channel.map(FileChannel.MapMode.READ_ONLY, offset, length);
       }
     } catch (IOException e) {
-      String errorMessage = "Error in reading " + this;
       try {
         if (channel != null) {
           long size = channel.size();
-          errorMessage = "Error in reading " + this + " (actual file length " + size + ")";
+          throw new IOException("Error in reading " + this + " (actual file length " + size + ")",
+            e);
         }
       } catch (IOException ignored) {
         // ignore
       }
-      throw new IOException(errorMessage, e);
+      throw new IOException("Error in opening " + this, e);
     } finally {
       JavaUtils.closeQuietly(channel);
     }
@@ -95,24 +94,26 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
   @Override
   public InputStream createInputStream() throws IOException {
     FileInputStream is = null;
-    boolean shouldClose = true;
     try {
       is = new FileInputStream(file);
       ByteStreams.skipFully(is, offset);
-      InputStream r = new LimitedInputStream(is, length);
-      shouldClose = false;
-      return r;
+      return new LimitedInputStream(is, length);
     } catch (IOException e) {
-      String errorMessage = "Error in reading " + this;
-      if (is != null) {
-        long size = file.length();
-        errorMessage = "Error in reading " + this + " (actual file length " + size + ")";
-      }
-      throw new IOException(errorMessage, e);
-    } finally {
-      if (shouldClose) {
+      try {
+        if (is != null) {
+          long size = file.length();
+          throw new IOException("Error in reading " + this + " (actual file length " + size + ")",
+              e);
+        }
+      } catch (IOException ignored) {
+        // ignore
+      } finally {
         JavaUtils.closeQuietly(is);
       }
+      throw new IOException("Error in opening " + this, e);
+    } catch (RuntimeException e) {
+      JavaUtils.closeQuietly(is);
+      throw e;
     }
   }
 
@@ -131,7 +132,7 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
     if (conf.lazyFileDescriptor()) {
       return new DefaultFileRegion(file, offset, length);
     } else {
-      FileChannel fileChannel = FileChannel.open(file.toPath(), StandardOpenOption.READ);
+      FileChannel fileChannel = new FileInputStream(file).getChannel();
       return new DefaultFileRegion(fileChannel, offset, length);
     }
   }

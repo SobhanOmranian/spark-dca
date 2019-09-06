@@ -31,9 +31,10 @@ import org.apache.spark.ml.tree._
 import org.apache.spark.ml.tree.impl.GradientBoostedTrees
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.util.DefaultParamsReader.Metadata
-import org.apache.spark.ml.util.Instrumentation.instrumented
 import org.apache.spark.mllib.tree.configuration.{Algo => OldAlgo}
+import org.apache.spark.mllib.tree.loss.LogLoss
 import org.apache.spark.mllib.tree.model.{GradientBoostedTreesModel => OldGBTModel}
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import org.apache.spark.sql.functions._
 
@@ -69,27 +70,27 @@ class GBTClassifier @Since("1.4.0") (
 
   /** @group setParam */
   @Since("1.4.0")
-  def setMaxDepth(value: Int): this.type = set(maxDepth, value)
+  override def setMaxDepth(value: Int): this.type = set(maxDepth, value)
 
   /** @group setParam */
   @Since("1.4.0")
-  def setMaxBins(value: Int): this.type = set(maxBins, value)
+  override def setMaxBins(value: Int): this.type = set(maxBins, value)
 
   /** @group setParam */
   @Since("1.4.0")
-  def setMinInstancesPerNode(value: Int): this.type = set(minInstancesPerNode, value)
+  override def setMinInstancesPerNode(value: Int): this.type = set(minInstancesPerNode, value)
 
   /** @group setParam */
   @Since("1.4.0")
-  def setMinInfoGain(value: Double): this.type = set(minInfoGain, value)
+  override def setMinInfoGain(value: Double): this.type = set(minInfoGain, value)
 
   /** @group expertSetParam */
   @Since("1.4.0")
-  def setMaxMemoryInMB(value: Int): this.type = set(maxMemoryInMB, value)
+  override def setMaxMemoryInMB(value: Int): this.type = set(maxMemoryInMB, value)
 
   /** @group expertSetParam */
   @Since("1.4.0")
-  def setCacheNodeIds(value: Boolean): this.type = set(cacheNodeIds, value)
+  override def setCacheNodeIds(value: Boolean): this.type = set(cacheNodeIds, value)
 
   /**
    * Specifies how often to checkpoint the cached node IDs.
@@ -101,7 +102,7 @@ class GBTClassifier @Since("1.4.0") (
    * @group setParam
    */
   @Since("1.4.0")
-  def setCheckpointInterval(value: Int): this.type = set(checkpointInterval, value)
+  override def setCheckpointInterval(value: Int): this.type = set(checkpointInterval, value)
 
   /**
    * The impurity setting is ignored for GBT models.
@@ -110,7 +111,7 @@ class GBTClassifier @Since("1.4.0") (
    * @group setParam
    */
   @Since("1.4.0")
-  def setImpurity(value: String): this.type = {
+  override def setImpurity(value: String): this.type = {
     logWarning("GBTClassifier.setImpurity should NOT be used")
     this
   }
@@ -119,26 +120,21 @@ class GBTClassifier @Since("1.4.0") (
 
   /** @group setParam */
   @Since("1.4.0")
-  def setSubsamplingRate(value: Double): this.type = set(subsamplingRate, value)
+  override def setSubsamplingRate(value: Double): this.type = set(subsamplingRate, value)
 
   /** @group setParam */
   @Since("1.4.0")
-  def setSeed(value: Long): this.type = set(seed, value)
+  override def setSeed(value: Long): this.type = set(seed, value)
 
   // Parameters from GBTParams:
 
   /** @group setParam */
   @Since("1.4.0")
-  def setMaxIter(value: Int): this.type = set(maxIter, value)
+  override def setMaxIter(value: Int): this.type = set(maxIter, value)
 
   /** @group setParam */
   @Since("1.4.0")
-  def setStepSize(value: Double): this.type = set(stepSize, value)
-
-  /** @group setParam */
-  @Since("2.3.0")
-  def setFeatureSubsetStrategy(value: String): this.type =
-    set(featureSubsetStrategy, value)
+  override def setStepSize(value: Double): this.type = set(stepSize, value)
 
   // Parameters from GBTClassifierParams:
 
@@ -146,22 +142,12 @@ class GBTClassifier @Since("1.4.0") (
   @Since("1.4.0")
   def setLossType(value: String): this.type = set(lossType, value)
 
-  /** @group setParam */
-  @Since("2.4.0")
-  def setValidationIndicatorCol(value: String): this.type = {
-    set(validationIndicatorCol, value)
-  }
-
-  override protected def train(
-      dataset: Dataset[_]): GBTClassificationModel = instrumented { instr =>
+  override protected def train(dataset: Dataset[_]): GBTClassificationModel = {
     val categoricalFeatures: Map[Int, Int] =
       MetadataUtils.getCategoricalFeatures(dataset.schema($(featuresCol)))
-
-    val withValidation = isDefined(validationIndicatorCol) && $(validationIndicatorCol).nonEmpty
-
     // We copy and modify this from Classifier.extractLabeledPoints since GBT only supports
     // 2 classes now.  This lets us provide a more precise error message.
-    val convert2LabeledPoint = (dataset: Dataset[_]) => {
+    val oldDataset: RDD[LabeledPoint] =
       dataset.select(col($(labelCol)), col($(featuresCol))).rdd.map {
         case Row(label: Double, features: Vector) =>
           require(label == 0 || label == 1, s"GBTClassifier was given" +
@@ -169,17 +155,7 @@ class GBTClassifier @Since("1.4.0") (
             s" GBTClassifier currently only supports binary classification.")
           LabeledPoint(label, features)
       }
-    }
-
-    val (trainDataset, validationDataset) = if (withValidation) {
-      (
-        convert2LabeledPoint(dataset.filter(not(col($(validationIndicatorCol))))),
-        convert2LabeledPoint(dataset.filter(col($(validationIndicatorCol))))
-      )
-    } else {
-      (convert2LabeledPoint(dataset), null)
-    }
-
+    val numFeatures = oldDataset.first().features.size
     val boostingStrategy = super.getOldBoostingStrategy(categoricalFeatures, OldAlgo.Classification)
 
     val numClasses = 2
@@ -189,25 +165,18 @@ class GBTClassifier @Since("1.4.0") (
         s" numClasses=$numClasses, but thresholds has length ${$(thresholds).length}")
     }
 
-    instr.logPipelineStage(this)
-    instr.logDataset(dataset)
-    instr.logParams(this, labelCol, featuresCol, predictionCol, leafCol, impurity,
-      lossType, maxDepth, maxBins, maxIter, maxMemoryInMB, minInfoGain, minInstancesPerNode,
-      seed, stepSize, subsamplingRate, cacheNodeIds, checkpointInterval, featureSubsetStrategy,
-      validationIndicatorCol, validationTol)
+    val instr = Instrumentation.create(this, oldDataset)
+    instr.logParams(labelCol, featuresCol, predictionCol, impurity, lossType,
+      maxDepth, maxBins, maxIter, maxMemoryInMB, minInfoGain, minInstancesPerNode,
+      seed, stepSize, subsamplingRate, cacheNodeIds, checkpointInterval)
+    instr.logNumFeatures(numFeatures)
     instr.logNumClasses(numClasses)
 
-    val (baseLearners, learnerWeights) = if (withValidation) {
-      GradientBoostedTrees.runWithValidation(trainDataset, validationDataset, boostingStrategy,
-        $(seed), $(featureSubsetStrategy))
-    } else {
-      GradientBoostedTrees.run(trainDataset, boostingStrategy, $(seed), $(featureSubsetStrategy))
-    }
-
-    val numFeatures = baseLearners.head.numFeatures
-    instr.logNumFeatures(numFeatures)
-
-    new GBTClassificationModel(uid, baseLearners, learnerWeights, numFeatures)
+    val (baseLearners, learnerWeights) = GradientBoostedTrees.run(oldDataset, boostingStrategy,
+      $(seed))
+    val m = new GBTClassificationModel(uid, baseLearners, learnerWeights, numFeatures)
+    instr.logSuccess(m)
+    m
   }
 
   @Since("1.4.1")
@@ -286,19 +255,15 @@ class GBTClassificationModel private[ml](
   @Since("1.4.0")
   override def treeWeights: Array[Double] = _treeWeights
 
-  override def transform(dataset: Dataset[_]): DataFrame = {
-    transformSchema(dataset.schema, logging = true)
-
-    val outputData = super.transform(dataset)
-    if ($(leafCol).nonEmpty) {
-      val leafUDF = udf { features: Vector => predictLeaf(features) }
-      outputData.withColumn($(leafCol), leafUDF(col($(featuresCol))))
-    } else {
-      outputData
+  override protected def transformImpl(dataset: Dataset[_]): DataFrame = {
+    val bcastModel = dataset.sparkSession.sparkContext.broadcast(this)
+    val predictUDF = udf { (features: Any) =>
+      bcastModel.value.predict(features.asInstanceOf[Vector])
     }
+    dataset.withColumn($(predictionCol), predictUDF(col($(featuresCol))))
   }
 
-  override def predict(features: Vector): Double = {
+  override protected def predict(features: Vector): Double = {
     // If thresholds defined, use predictRaw to get probabilities, otherwise use optimization
     if (isDefined(thresholds)) {
       super.predict(features)
@@ -345,12 +310,11 @@ class GBTClassificationModel private[ml](
    * The importance vector is normalized to sum to 1. This method is suggested by Hastie et al.
    * (Hastie, Tibshirani, Friedman. "The Elements of Statistical Learning, 2nd Edition." 2001.)
    * and follows the implementation from scikit-learn.
-   *
+
    * See `DecisionTreeClassificationModel.featureImportances`
    */
   @Since("2.0.0")
-  lazy val featureImportances: Vector =
-    TreeEnsembleModel.featureImportances(trees, numFeatures, perTreeNormalization = false)
+  lazy val featureImportances: Vector = TreeEnsembleModel.featureImportances(trees, numFeatures)
 
   /** Raw prediction for the positive class. */
   private def margin(features: Vector): Double = {
@@ -365,21 +329,6 @@ class GBTClassificationModel private[ml](
 
   // hard coded loss, which is not meant to be changed in the model
   private val loss = getOldLossType
-
-  /**
-   * Method to compute error or loss for every iteration of gradient boosting.
-   *
-   * @param dataset Dataset for validation.
-   */
-  @Since("2.4.0")
-  def evaluateEachIteration(dataset: Dataset[_]): Array[Double] = {
-    val data = dataset.select(col($(labelCol)), col($(featuresCol))).rdd.map {
-      case Row(label: Double, features: Vector) => LabeledPoint(label, features)
-    }
-    GradientBoostedTrees.evaluateEachIteration(data, trees, treeWeights, loss,
-      OldAlgo.Classification
-    )
-  }
 
   @Since("2.0.0")
   override def write: MLWriter = new GBTClassificationModel.GBTClassificationModelWriter(this)
@@ -426,16 +375,14 @@ object GBTClassificationModel extends MLReadable[GBTClassificationModel] {
         case (treeMetadata, root) =>
           val tree =
             new DecisionTreeRegressionModel(treeMetadata.uid, root, numFeatures)
-          treeMetadata.getAndSetParams(tree)
+          DefaultParamsReader.getAndSetParams(tree, treeMetadata)
           tree
       }
       require(numTrees == trees.length, s"GBTClassificationModel.load expected $numTrees" +
         s" trees based on metadata but found ${trees.length} trees.")
       val model = new GBTClassificationModel(metadata.uid,
         trees, treeWeights, numFeatures)
-      // We ignore the impurity while loading models because in previous models it was wrongly
-      // set to gini (see SPARK-25959).
-      metadata.getAndSetParams(model, Some(List("impurity")))
+      DefaultParamsReader.getAndSetParams(model, metadata)
       model
     }
   }

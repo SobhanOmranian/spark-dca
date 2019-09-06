@@ -24,7 +24,6 @@ import scala.io.Source
 import org.scalatest.Matchers
 
 import org.apache.spark.{SharedSparkContext, SparkConf, SparkFunSuite}
-import org.apache.spark.internal.config.Kryo._
 import org.apache.spark.serializer.KryoSerializer
 import org.apache.spark.util.Utils
 
@@ -32,6 +31,7 @@ import org.apache.spark.util.Utils
 // a PythonBroadcast:
 class PythonBroadcastSuite extends SparkFunSuite with Matchers with SharedSparkContext {
   test("PythonBroadcast can be serialized with Kryo (SPARK-4882)") {
+    val tempDir = Utils.createTempDir()
     val broadcastedString = "Hello, world!"
     def assertBroadcastIsValid(broadcast: PythonBroadcast): Unit = {
       val source = Source.fromFile(broadcast.path)
@@ -39,20 +39,22 @@ class PythonBroadcastSuite extends SparkFunSuite with Matchers with SharedSparkC
       source.close()
       contents should be (broadcastedString)
     }
-    withTempDir { tempDir =>
+    try {
       val broadcastDataFile: File = {
         val file = new File(tempDir, "broadcastData")
-        Utils.tryWithResource(new PrintWriter(file)) { printWriter =>
-          printWriter.write(broadcastedString)
-        }
+        val printWriter = new PrintWriter(file)
+        printWriter.write(broadcastedString)
+        printWriter.close()
         file
       }
       val broadcast = new PythonBroadcast(broadcastDataFile.getAbsolutePath)
       assertBroadcastIsValid(broadcast)
-      val conf = new SparkConf().set(KRYO_REGISTRATION_REQUIRED, true)
+      val conf = new SparkConf().set("spark.kryo.registrationRequired", "true")
       val deserializedBroadcast =
         Utils.clone[PythonBroadcast](broadcast, new KryoSerializer(conf).newInstance())
       assertBroadcastIsValid(deserializedBroadcast)
+    } finally {
+      Utils.deleteRecursively(tempDir)
     }
   }
 }

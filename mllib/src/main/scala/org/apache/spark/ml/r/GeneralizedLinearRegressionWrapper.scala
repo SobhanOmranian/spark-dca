@@ -65,7 +65,6 @@ private[r] class GeneralizedLinearRegressionWrapper private (
 private[r] object GeneralizedLinearRegressionWrapper
   extends MLReadable[GeneralizedLinearRegressionWrapper] {
 
-  // scalastyle:off
   def fit(
       formula: String,
       data: DataFrame,
@@ -76,15 +75,15 @@ private[r] object GeneralizedLinearRegressionWrapper
       weightCol: String,
       regParam: Double,
       variancePower: Double,
-      linkPower: Double,
-      stringIndexerOrderType: String,
-      offsetCol: String): GeneralizedLinearRegressionWrapper = {
-  // scalastyle:on
+      linkPower: Double): GeneralizedLinearRegressionWrapper = {
     val rFormula = new RFormula().setFormula(formula)
-      .setStringIndexerOrderType(stringIndexerOrderType)
     checkDataColumns(rFormula, data)
     val rFormulaModel = rFormula.fit(data)
-
+    // get labels and feature names from output schema
+    val schema = rFormulaModel.transform(data).schema
+    val featureAttrs = AttributeGroup.fromStructField(schema(rFormula.getFeaturesCol))
+      .attributes.get
+    val features = featureAttrs.map(_.name.get)
     // assemble and fit the pipeline
     val glr = new GeneralizedLinearRegression()
       .setFamily(family)
@@ -100,7 +99,6 @@ private[r] object GeneralizedLinearRegressionWrapper
       glr.setLink(link)
     }
     if (weightCol != null) glr.setWeightCol(weightCol)
-    if (offsetCol != null) glr.setOffsetCol(offsetCol)
 
     val pipeline = new Pipeline()
       .setStages(Array(rFormulaModel, glr))
@@ -111,16 +109,37 @@ private[r] object GeneralizedLinearRegressionWrapper
     val summary = glm.summary
 
     val rFeatures: Array[String] = if (glm.getFitIntercept) {
-      Array("(Intercept)") ++ summary.featureNames
+      Array("(Intercept)") ++ features
     } else {
-      summary.featureNames
+      features
     }
 
     val rCoefficients: Array[Double] = if (summary.isNormalSolver) {
-      summary.coefficientsWithStatistics.map(_._2) ++
-        summary.coefficientsWithStatistics.map(_._3) ++
-        summary.coefficientsWithStatistics.map(_._4) ++
-        summary.coefficientsWithStatistics.map(_._5)
+      val rCoefficientStandardErrors = if (glm.getFitIntercept) {
+        Array(summary.coefficientStandardErrors.last) ++
+          summary.coefficientStandardErrors.dropRight(1)
+      } else {
+        summary.coefficientStandardErrors
+      }
+
+      val rTValues = if (glm.getFitIntercept) {
+        Array(summary.tValues.last) ++ summary.tValues.dropRight(1)
+      } else {
+        summary.tValues
+      }
+
+      val rPValues = if (glm.getFitIntercept) {
+        Array(summary.pValues.last) ++ summary.pValues.dropRight(1)
+      } else {
+        summary.pValues
+      }
+
+      if (glm.getFitIntercept) {
+        Array(glm.intercept) ++ glm.coefficients.toArray ++
+          rCoefficientStandardErrors ++ rTValues ++ rPValues
+      } else {
+        glm.coefficients.toArray ++ rCoefficientStandardErrors ++ rTValues ++ rPValues
+      }
     } else {
       if (glm.getFitIntercept) {
         Array(glm.intercept) ++ glm.coefficients.toArray

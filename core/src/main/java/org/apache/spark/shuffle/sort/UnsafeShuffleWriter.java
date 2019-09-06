@@ -37,17 +37,15 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.spark.*;
 import org.apache.spark.annotation.Private;
-import org.apache.spark.internal.config.package$;
+import org.apache.spark.executor.ShuffleWriteMetrics;
 import org.apache.spark.io.CompressionCodec;
 import org.apache.spark.io.CompressionCodec$;
-import org.apache.spark.io.NioBufferedFileInputStream;
 import org.apache.commons.io.output.CloseShieldOutputStream;
 import org.apache.commons.io.output.CountingOutputStream;
 import org.apache.spark.memory.TaskMemoryManager;
 import org.apache.spark.network.util.LimitedInputStream;
 import org.apache.spark.scheduler.MapStatus;
 import org.apache.spark.scheduler.MapStatus$;
-import org.apache.spark.shuffle.ShuffleWriteMetricsReporter;
 import org.apache.spark.serializer.SerializationStream;
 import org.apache.spark.serializer.SerializerInstance;
 import org.apache.spark.shuffle.IndexShuffleBlockResolver;
@@ -66,22 +64,19 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
 
   @VisibleForTesting
   static final int DEFAULT_INITIAL_SORT_BUFFER_SIZE = 4096;
-  static final int DEFAULT_INITIAL_SER_BUFFER_SIZE = 1024 * 1024;
 
   private final BlockManager blockManager;
   private final IndexShuffleBlockResolver shuffleBlockResolver;
   private final TaskMemoryManager memoryManager;
   private final SerializerInstance serializer;
   private final Partitioner partitioner;
-  private final ShuffleWriteMetricsReporter writeMetrics;
+  private final ShuffleWriteMetrics writeMetrics;
   private final int shuffleId;
   private final int mapId;
   private final TaskContext taskContext;
   private final SparkConf sparkConf;
   private final boolean transferToEnabled;
   private final int initialSortBufferSize;
-  private final int inputBufferSizeInBytes;
-  private final int outputBufferSizeInBytes;
 
   @Nullable private MapStatus mapStatus;
   @Nullable private ShuffleExternalSorter sorter;
@@ -103,18 +98,6 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
    */
   private boolean stopping = false;
 
-  private class CloseAndFlushShieldOutputStream extends CloseShieldOutputStream {
-
-    CloseAndFlushShieldOutputStream(OutputStream outputStream) {
-      super(outputStream);
-    }
-
-    @Override
-    public void flush() {
-      // do nothing
-    }
-  }
-
   public UnsafeShuffleWriter(
       BlockManager blockManager,
       IndexShuffleBlockResolver shuffleBlockResolver,
@@ -122,8 +105,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       SerializedShuffleHandle<K, V> handle,
       int mapId,
       TaskContext taskContext,
-      SparkConf sparkConf,
-      ShuffleWriteMetricsReporter writeMetrics) throws IOException {
+      SparkConf sparkConf) throws IOException {
     final int numPartitions = handle.dependency().partitioner().numPartitions();
     if (numPartitions > SortShuffleManager.MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE()) {
       throw new IllegalArgumentException(
@@ -139,16 +121,12 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     this.shuffleId = dep.shuffleId();
     this.serializer = dep.serializer().newInstance();
     this.partitioner = dep.partitioner();
-    this.writeMetrics = writeMetrics;
+    this.writeMetrics = taskContext.taskMetrics().shuffleWriteMetrics();
     this.taskContext = taskContext;
     this.sparkConf = sparkConf;
     this.transferToEnabled = sparkConf.getBoolean("spark.file.transferTo", true);
-    this.initialSortBufferSize =
-      (int) (long) sparkConf.get(package$.MODULE$.SHUFFLE_SORT_INIT_BUFFER_SIZE());
-    this.inputBufferSizeInBytes =
-      (int) (long) sparkConf.get(package$.MODULE$.SHUFFLE_FILE_BUFFER_SIZE()) * 1024;
-    this.outputBufferSizeInBytes =
-      (int) (long) sparkConf.get(package$.MODULE$.SHUFFLE_UNSAFE_FILE_OUTPUT_BUFFER_SIZE()) * 1024;
+    this.initialSortBufferSize = sparkConf.getInt("spark.shuffle.sort.initialBufferSize",
+                                                  DEFAULT_INITIAL_SORT_BUFFER_SIZE);
     open();
   }
 
@@ -208,7 +186,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     }
   }
 
-  private void open() {
+  private void open() throws IOException {
     assert (sorter == null);
     sorter = new ShuffleExternalSorter(
       memoryManager,
@@ -218,7 +196,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       partitioner.numPartitions(),
       sparkConf,
       writeMetrics);
-    serBuffer = new MyByteArrayOutputStream(DEFAULT_INITIAL_SER_BUFFER_SIZE);
+    serBuffer = new MyByteArrayOutputStream(1024 * 1024);
     serOutputStream = serializer.serializeStream(serBuffer);
   }
 
@@ -282,10 +260,10 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
    * @return the partition lengths in the merged file.
    */
   private long[] mergeSpills(SpillInfo[] spills, File outputFile) throws IOException {
-    final boolean compressionEnabled = (boolean) sparkConf.get(package$.MODULE$.SHUFFLE_COMPRESS());
+    final boolean compressionEnabled = sparkConf.getBoolean("spark.shuffle.compress", true);
     final CompressionCodec compressionCodec = CompressionCodec$.MODULE$.createCodec(sparkConf);
     final boolean fastMergeEnabled =
-      (boolean) sparkConf.get(package$.MODULE$.SHUFFLE_UNDAFE_FAST_MERGE_ENABLE());
+      sparkConf.getBoolean("spark.shuffle.unsafe.fastMergeEnabled", true);
     final boolean fastMergeIsSupported = !compressionEnabled ||
       CompressionCodec$.MODULE$.supportsConcatenationOfSerializedStreams(compressionCodec);
     final boolean encryptionEnabled = blockManager.serializerManager().encryptionEnabled();
@@ -343,15 +321,11 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
   }
 
   /**
-   * Merges spill files using Java FileStreams. This code path is typically slower than
-   * the NIO-based merge, {@link UnsafeShuffleWriter#mergeSpillsWithTransferTo(SpillInfo[],
-   * File)}, and it's mostly used in cases where the IO compression codec does not support
-   * concatenation of compressed data, when encryption is enabled, or when users have
-   * explicitly disabled use of {@code transferTo} in order to work around kernel bugs.
-   * This code path might also be faster in cases where individual partition size in a spill
-   * is small and UnsafeShuffleWriter#mergeSpillsWithTransferTo method performs many small
-   * disk ios which is inefficient. In those case, Using large buffers for input and output
-   * files helps reducing the number of disk ios, making the file merging faster.
+   * Merges spill files using Java FileStreams. This code path is slower than the NIO-based merge,
+   * {@link UnsafeShuffleWriter#mergeSpillsWithTransferTo(SpillInfo[], File)}, so it's only used in
+   * cases where the IO compression codec does not support concatenation of compressed data, when
+   * encryption is enabled, or when users have explicitly disabled use of {@code transferTo} in
+   * order to work around kernel bugs.
    *
    * @param spills the spills to merge.
    * @param outputFile the file to write the merged data to.
@@ -365,28 +339,24 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     assert (spills.length >= 2);
     final int numPartitions = partitioner.numPartitions();
     final long[] partitionLengths = new long[numPartitions];
-    final InputStream[] spillInputStreams = new InputStream[spills.length];
+    final InputStream[] spillInputStreams = new FileInputStream[spills.length];
 
-    final OutputStream bos = new BufferedOutputStream(
-            new FileOutputStream(outputFile),
-            outputBufferSizeInBytes);
     // Use a counting output stream to avoid having to close the underlying file and ask
     // the file system for its size after each partition is written.
-    final CountingOutputStream mergedFileOutputStream = new CountingOutputStream(bos);
+    final CountingOutputStream mergedFileOutputStream = new CountingOutputStream(
+      new FileOutputStream(outputFile));
 
     boolean threwException = true;
     try {
       for (int i = 0; i < spills.length; i++) {
-        spillInputStreams[i] = new NioBufferedFileInputStream(
-            spills[i].file,
-            inputBufferSizeInBytes);
+        spillInputStreams[i] = new FileInputStream(spills[i].file);
       }
       for (int partition = 0; partition < numPartitions; partition++) {
         final long initialFileLength = mergedFileOutputStream.getByteCount();
-        // Shield the underlying output stream from close() and flush() calls, so that we can close
+        // Shield the underlying output stream from close() calls, so that we can close
         // the higher level streams to make sure all data is really flushed and internal state is
         // cleaned.
-        OutputStream partitionOutput = new CloseAndFlushShieldOutputStream(
+        OutputStream partitionOutput = new CloseShieldOutputStream(
           new TimeTrackingOutputStream(writeMetrics, mergedFileOutputStream));
         partitionOutput = blockManager.serializerManager().wrapForEncryption(partitionOutput);
         if (compressionCodec != null) {

@@ -30,10 +30,7 @@ import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.Dataset
 import org.apache.spark.sql.catalyst.planning.PhysicalOperation
 import org.apache.spark.sql.catalyst.plans.logical._
-import org.apache.spark.sql.catalyst.plans.logical.sql.{DescribeColumnStatement, DescribeTableStatement}
 import org.apache.spark.sql.catalyst.util._
-import org.apache.spark.sql.execution.HiveResult.hiveResultString
-import org.apache.spark.sql.execution.SQLExecution
 import org.apache.spark.sql.execution.command._
 import org.apache.spark.sql.hive.test.{TestHive, TestHiveQueryExecution}
 
@@ -49,8 +46,6 @@ import org.apache.spark.sql.hive.test.{TestHive, TestHiveQueryExecution}
  */
 abstract class HiveComparisonTest
   extends SparkFunSuite with BeforeAndAfterAll with GivenWhenThen {
-
-  override protected val enableAutoThreadAudit = false
 
   /**
    * Path to the test datasets. We find this by looking up "hive-test-path-helper.txt" file.
@@ -173,7 +168,7 @@ abstract class HiveComparisonTest
       // and does not return it as a query answer.
       case _: SetCommand => Seq("0")
       case _: ExplainCommand => answer
-      case _: DescribeCommandBase | ShowColumnsCommand(_, _) =>
+      case _: DescribeTableCommand | ShowColumnsCommand(_, _) =>
         // Filter out non-deterministic lines and lines which do not have actual results but
         // can introduce problems because of the way Hive formats these lines.
         // Then, remove empty lines. Do not sort the results.
@@ -197,7 +192,12 @@ abstract class HiveComparisonTest
     "last_modified_by",
     "last_modified_time",
     "Owner:",
+    "COLUMN_STATS_ACCURATE",
     // The following are hive specific schema parameters which we do not need to match exactly.
+    "numFiles",
+    "numRows",
+    "rawDataSize",
+    "totalSize",
     "totalNumberFiles",
     "maxFileSize",
     "minFileSize"
@@ -346,11 +346,7 @@ abstract class HiveComparisonTest
         // Run w/ catalyst
         val catalystResults = queryList.zip(hiveResults).map { case (queryString, hive) =>
           val query = new TestHiveQueryExecution(queryString.replace("../../data", testDataPath))
-          def getResult(): Seq[String] = {
-            SQLExecution.withNewExecutionId(
-              query.sparkSession, query)(hiveResultString(query.executedPlan))
-          }
-          try { (query, prepareAnswer(query, getResult())) } catch {
+          try { (query, prepareAnswer(query, query.hiveResultString())) } catch {
             case e: Throwable =>
               val errorMessage =
                 s"""
@@ -376,9 +372,7 @@ abstract class HiveComparisonTest
             if ((!hiveQuery.logical.isInstanceOf[ExplainCommand]) &&
                 (!hiveQuery.logical.isInstanceOf[ShowFunctionsCommand]) &&
                 (!hiveQuery.logical.isInstanceOf[DescribeFunctionCommand]) &&
-                (!hiveQuery.logical.isInstanceOf[DescribeCommandBase]) &&
-                (!hiveQuery.logical.isInstanceOf[DescribeTableStatement]) &&
-                (!hiveQuery.logical.isInstanceOf[DescribeColumnStatement]) &&
+                (!hiveQuery.logical.isInstanceOf[DescribeTableCommand]) &&
                 preparedHive != catalyst) {
 
               val hivePrintOut = s"== HIVE - ${preparedHive.size} row(s) ==" +: preparedHive

@@ -80,9 +80,6 @@ public final class MessageDecoder extends MessageToMessageDecoder<ByteBuf> {
       case StreamFailure:
         return StreamFailure.decode(in);
 
-      case UploadStream:
-        return UploadStream.decode(in);
-
       default:
         throw new IllegalArgumentException("Unexpected message type: " + msgType);
     }

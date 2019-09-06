@@ -17,7 +17,8 @@
 
 package org.apache.spark.mllib.pmml.export
 
-import org.dmg.pmml.regression.RegressionModel
+import org.dmg.pmml.RegressionModel
+import org.dmg.pmml.RegressionNormalizationMethodType
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.mllib.classification.LogisticRegressionModel
@@ -50,8 +51,7 @@ class BinaryClassificationPMMLModelExportSuite extends SparkFunSuite {
     assert(pmmlRegressionModel.getRegressionTables.get(1).getTargetCategory === "0")
     assert(pmmlRegressionModel.getRegressionTables.get(1).getNumericPredictors.size === 0)
     // ensure logistic regression has normalization method set to LOGIT
-    assert(pmmlRegressionModel.getNormalizationMethod() ===
-      RegressionModel.NormalizationMethod.LOGIT)
+    assert(pmmlRegressionModel.getNormalizationMethod() == RegressionNormalizationMethodType.LOGIT)
   }
 
   test("linear SVM PMML export") {
@@ -78,8 +78,7 @@ class BinaryClassificationPMMLModelExportSuite extends SparkFunSuite {
     assert(pmmlRegressionModel.getRegressionTables.get(1).getTargetCategory === "0")
     assert(pmmlRegressionModel.getRegressionTables.get(1).getNumericPredictors.size === 0)
     // ensure linear SVM has normalization method set to NONE
-    assert(pmmlRegressionModel.getNormalizationMethod() ===
-      RegressionModel.NormalizationMethod.NONE)
+    assert(pmmlRegressionModel.getNormalizationMethod() == RegressionNormalizationMethodType.NONE)
   }
 
 }

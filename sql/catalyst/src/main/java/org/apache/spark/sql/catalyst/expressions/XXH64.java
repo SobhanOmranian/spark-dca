@@ -17,7 +17,6 @@
 package org.apache.spark.sql.catalyst.expressions;
 
 import org.apache.spark.unsafe.Platform;
-import org.apache.spark.unsafe.types.UTF8String;
 
 // scalastyle: off
 /**
@@ -104,10 +103,6 @@ public final class XXH64 {
       offset++;
     }
     return fmix(hash);
-  }
-
-  public static long hashUTF8String(UTF8String str, long seed) {
-    return hashUnsafeBytes(str.getBaseObject(), str.getBaseOffset(), str.numBytes(), seed);
   }
 
   private static long fmix(long hash) {

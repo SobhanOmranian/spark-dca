@@ -24,10 +24,9 @@ import scala.collection.JavaConverters._
 import org.apache.mesos.Protos.{TaskState => MesosTaskState, _}
 import org.apache.mesos.Protos.Value.{Scalar, Type}
 import org.apache.mesos.SchedulerDriver
-import org.mockito.ArgumentCaptor
-import org.mockito.ArgumentMatchers.{eq => meq}
+import org.mockito.{ArgumentCaptor, Matchers}
 import org.mockito.Mockito._
-import org.scalatest.mockito.MockitoSugar
+import org.scalatest.mock.MockitoSugar
 
 import org.apache.spark.{LocalSparkContext, SparkConf, SparkFunSuite}
 import org.apache.spark.deploy.Command
@@ -105,7 +104,7 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     val response = scheduler.submitDriver(
       new MesosDriverDescription("d1", "jar", 1200, 1.5, true,
         command,
-        Map((config.EXECUTOR_HOME.key, "test"), ("spark.app.name", "test")),
+        Map(("spark.mesos.executor.home", "test"), ("spark.app.name", "test")),
         "s1",
         new Date()))
     assert(response.success)
@@ -134,7 +133,7 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
 
     when(
       driver.launchTasks(
-        meq(Collections.singleton(offer.getId)),
+        Matchers.eq(Collections.singleton(offer.getId)),
         capture.capture())
     ).thenReturn(Status.valueOf(1))
 
@@ -147,17 +146,17 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     assert(scheduler.getResource(resources, "cpus") == 1.5)
     assert(scheduler.getResource(resources, "mem") == 1200)
     val resourcesSeq: Seq[Resource] = resources.asScala
-    val cpus = resourcesSeq.filter(_.getName == "cpus").toList
+    val cpus = resourcesSeq.filter(_.getName.equals("cpus")).toList
     assert(cpus.size == 2)
-    assert(cpus.exists(_.getRole() == "role2"))
-    assert(cpus.exists(_.getRole() == "*"))
-    val mem = resourcesSeq.filter(_.getName == "mem").toList
+    assert(cpus.exists(_.getRole().equals("role2")))
+    assert(cpus.exists(_.getRole().equals("*")))
+    val mem = resourcesSeq.filter(_.getName.equals("mem")).toList
     assert(mem.size == 2)
-    assert(mem.exists(_.getRole() == "role2"))
-    assert(mem.exists(_.getRole() == "*"))
+    assert(mem.exists(_.getRole().equals("role2")))
+    assert(mem.exists(_.getRole().equals("*")))
 
     verify(driver, times(1)).launchTasks(
-      meq(Collections.singleton(offer.getId)),
+      Matchers.eq(Collections.singleton(offer.getId)),
       capture.capture()
     )
   }
@@ -209,9 +208,9 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     val response = scheduler.submitDriver(
       new MesosDriverDescription("d1", "jar", mem, cpu, true,
         command,
-        Map(config.EXECUTOR_HOME.key -> "test",
+        Map("spark.mesos.executor.home" -> "test",
           "spark.app.name" -> "test",
-          config.DRIVER_ENV_PREFIX + "TEST_ENV" -> "TEST_VAL"),
+          "spark.mesos.driverEnv.TEST_ENV" -> "TEST_VAL"),
         "s1",
         new Date()))
     assert(response.success)
@@ -224,7 +223,7 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     assert(env.getOrElse("TEST_ENV", null) == "TEST_VAL")
   }
 
-  test("supports spark.mesos.network.name and spark.mesos.network.labels") {
+  test("supports spark.mesos.network.name") {
     setScheduler()
 
     val mem = 1000
@@ -233,10 +232,9 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     val response = scheduler.submitDriver(
       new MesosDriverDescription("d1", "jar", mem, cpu, true,
         command,
-        Map(config.EXECUTOR_HOME.key -> "test",
+        Map("spark.mesos.executor.home" -> "test",
           "spark.app.name" -> "test",
-          config.NETWORK_NAME.key -> "test-network-name",
-          config.NETWORK_LABELS.key -> "key1:val1,key2:val2"),
+          "spark.mesos.network.name" -> "test-network-name"),
         "s1",
         new Date()))
 
@@ -249,84 +247,6 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     val networkInfos = launchedTasks.head.getContainer.getNetworkInfosList
     assert(networkInfos.size == 1)
     assert(networkInfos.get(0).getName == "test-network-name")
-    assert(networkInfos.get(0).getLabels.getLabels(0).getKey == "key1")
-    assert(networkInfos.get(0).getLabels.getLabels(0).getValue == "val1")
-    assert(networkInfos.get(0).getLabels.getLabels(1).getKey == "key2")
-    assert(networkInfos.get(0).getLabels.getLabels(1).getValue == "val2")
-  }
-
-  test("supports setting fetcher cache") {
-    setScheduler()
-
-    val mem = 1000
-    val cpu = 1
-
-    val response = scheduler.submitDriver(
-      new MesosDriverDescription("d1", "jar", mem, cpu, true,
-        command,
-        Map(config.EXECUTOR_HOME.key -> "test",
-          config.ENABLE_FETCHER_CACHE.key -> "true",
-          "spark.app.name" -> "test"),
-        "s1",
-        new Date()))
-
-    assert(response.success)
-
-    val offer = Utils.createOffer("o1", "s1", mem, cpu)
-    scheduler.resourceOffers(driver, List(offer).asJava)
-
-    val launchedTasks = Utils.verifyTaskLaunched(driver, "o1")
-    val uris = launchedTasks.head.getCommand.getUrisList
-    assert(uris.asScala.forall(_.getCache))
-  }
-
-  test("supports setting fetcher cache on the dispatcher") {
-    setScheduler(Map(config.ENABLE_FETCHER_CACHE.key -> "true"))
-
-    val mem = 1000
-    val cpu = 1
-
-    val response = scheduler.submitDriver(
-      new MesosDriverDescription("d1", "jar", mem, cpu, true,
-        command,
-        Map(config.EXECUTOR_HOME.key -> "test",
-          "spark.app.name" -> "test"),
-        "s1",
-        new Date()))
-
-    assert(response.success)
-
-    val offer = Utils.createOffer("o1", "s1", mem, cpu)
-    scheduler.resourceOffers(driver, List(offer).asJava)
-
-    val launchedTasks = Utils.verifyTaskLaunched(driver, "o1")
-    val uris = launchedTasks.head.getCommand.getUrisList
-    assert(uris.asScala.forall(_.getCache))
-  }
-
-  test("supports disabling fetcher cache") {
-    setScheduler()
-
-    val mem = 1000
-    val cpu = 1
-
-    val response = scheduler.submitDriver(
-      new MesosDriverDescription("d1", "jar", mem, cpu, true,
-        command,
-        Map(config.EXECUTOR_HOME.key -> "test",
-          config.ENABLE_FETCHER_CACHE.key -> "false",
-          "spark.app.name" -> "test"),
-        "s1",
-        new Date()))
-
-    assert(response.success)
-
-    val offer = Utils.createOffer("o1", "s1", mem, cpu)
-    scheduler.resourceOffers(driver, List(offer).asJava)
-
-    val launchedTasks = Utils.verifyTaskLaunched(driver, "o1")
-    val uris = launchedTasks.head.getCommand.getUrisList
-    assert(uris.asScala.forall(!_.getCache))
   }
 
   test("accept/decline offers with driver constraints") {
@@ -347,7 +267,7 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
       val response = scheduler.submitDriver(
         new MesosDriverDescription("d1", "jar", mem, cpu, true,
           command,
-          Map(config.EXECUTOR_HOME.key -> "test",
+          Map("spark.mesos.executor.home" -> "test",
             "spark.app.name" -> "test",
             config.DRIVER_CONSTRAINTS.key -> driverConstraints),
           "s1",
@@ -376,33 +296,6 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     Utils.verifyTaskLaunched(driver, "o3")
   }
 
-  test("supports spark.mesos.driver.labels") {
-    setScheduler()
-
-    val mem = 1000
-    val cpu = 1
-
-    val response = scheduler.submitDriver(
-      new MesosDriverDescription("d1", "jar", mem, cpu, true,
-        command,
-        Map(config.EXECUTOR_HOME.key -> "test",
-          "spark.app.name" -> "test",
-          config.DRIVER_LABELS.key -> "key:value"),
-        "s1",
-        new Date()))
-
-    assert(response.success)
-
-    val offer = Utils.createOffer("o1", "s1", mem, cpu)
-    scheduler.resourceOffers(driver, List(offer).asJava)
-
-    val launchedTasks = Utils.verifyTaskLaunched(driver, "o1")
-    val labels = launchedTasks.head.getLabels
-    assert(labels.getLabelsCount == 1)
-    assert(labels.getLabels(0).getKey == "key")
-    assert(labels.getLabels(0).getValue == "value")
-  }
-
   test("can kill supervised drivers") {
     val conf = new SparkConf()
     conf.setMaster("mesos://localhost:5050")
@@ -411,7 +304,7 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
 
     val response = scheduler.submitDriver(
       new MesosDriverDescription("d1", "jar", 100, 1, true, command,
-        Map((config.EXECUTOR_HOME.key, "test"), ("spark.app.name", "test")), "s1", new Date()))
+        Map(("spark.mesos.executor.home", "test"), ("spark.app.name", "test")), "s1", new Date()))
     assert(response.success)
     val slaveId = SlaveID.newBuilder().setValue("s1").build()
     val offer = Offer.newBuilder()
@@ -450,86 +343,6 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     assert(state.finishedDrivers.size == 1)
   }
 
-  test("SPARK-27347: do not restart outdated supervised drivers") {
-    // Covers scenario where:
-    // - agent goes down
-    // - supervised job is relaunched on another agent
-    // - first agent re-registers and sends status update: TASK_FAILED
-    // - job should NOT be relaunched again
-    val conf = new SparkConf()
-    conf.setMaster("mesos://localhost:5050")
-    conf.setAppName("SparkMesosDriverRetries")
-    setScheduler(conf.getAll.toMap)
-
-    val mem = 1000
-    val cpu = 1
-    val offers = List(
-      Utils.createOffer("o1", "s1", mem, cpu, None),
-      Utils.createOffer("o2", "s2", mem, cpu, None),
-      Utils.createOffer("o3", "s1", mem, cpu, None))
-
-    val response = scheduler.submitDriver(
-      new MesosDriverDescription("d1", "jar", 100, 1, true, command,
-        Map(("spark.mesos.executor.home", "test"), ("spark.app.name", "test")), "sub1", new Date()))
-    assert(response.success)
-
-    // Offer a resource to launch the submitted driver
-    scheduler.resourceOffers(driver, Collections.singletonList(offers.head))
-    var state = scheduler.getSchedulerState()
-    assert(state.launchedDrivers.size == 1)
-
-    // Signal agent lost with status with TASK_LOST
-    val agent1 = SlaveID.newBuilder().setValue("s1").build()
-    var taskStatus = TaskStatus.newBuilder()
-      .setTaskId(TaskID.newBuilder().setValue(response.submissionId).build())
-      .setSlaveId(agent1)
-      .setReason(TaskStatus.Reason.REASON_SLAVE_REMOVED)
-      .setState(MesosTaskState.TASK_LOST)
-      .build()
-
-    scheduler.statusUpdate(driver, taskStatus)
-    state = scheduler.getSchedulerState()
-    assert(state.pendingRetryDrivers.size == 1)
-    assert(state.pendingRetryDrivers.head.submissionId == taskStatus.getTaskId.getValue)
-    assert(state.launchedDrivers.isEmpty)
-
-    // Offer new resource to retry driver on a new agent
-    Thread.sleep(1500) // sleep to cover nextRetry's default wait time of 1s
-    scheduler.resourceOffers(driver, Collections.singletonList(offers(1)))
-
-    val agent2 = SlaveID.newBuilder().setValue("s2").build()
-    taskStatus = TaskStatus.newBuilder()
-      .setTaskId(TaskID.newBuilder().setValue(response.submissionId).build())
-      .setSlaveId(agent2)
-      .setState(MesosTaskState.TASK_RUNNING)
-      .build()
-
-    scheduler.statusUpdate(driver, taskStatus)
-    state = scheduler.getSchedulerState()
-    assert(state.pendingRetryDrivers.isEmpty)
-    assert(state.launchedDrivers.size == 1)
-    assert(state.launchedDrivers.head.taskId.getValue.endsWith("-retry-1"))
-    assert(state.launchedDrivers.head.taskId.getValue != taskStatus.getTaskId.getValue)
-
-    // Agent1 comes back online and sends status update: TASK_FAILED
-    taskStatus = TaskStatus.newBuilder()
-      .setTaskId(TaskID.newBuilder().setValue(response.submissionId).build())
-      .setSlaveId(agent1)
-      .setState(MesosTaskState.TASK_FAILED)
-      .setMessage("Abnormal executor termination")
-      .setReason(TaskStatus.Reason.REASON_EXECUTOR_TERMINATED)
-      .build()
-
-    scheduler.statusUpdate(driver, taskStatus)
-    scheduler.resourceOffers(driver, Collections.singletonList(offers.last))
-
-    // Assert driver does not restart 2nd time
-    state = scheduler.getSchedulerState()
-    assert(state.pendingRetryDrivers.isEmpty)
-    assert(state.launchedDrivers.size == 1)
-    assert(state.launchedDrivers.head.taskId.getValue.endsWith("-retry-1"))
-  }
-
   test("Declines offer with refuse seconds = 120.") {
     setScheduler()
 
@@ -540,89 +353,5 @@ class MesosClusterSchedulerSuite extends SparkFunSuite with LocalSparkContext wi
     scheduler.resourceOffers(driver, Collections.singletonList(offer))
 
     verify(driver, times(1)).declineOffer(offerId, filter)
-  }
-
-  test("Creates an env-based reference secrets.") {
-    val launchedTasks = launchDriverTask(
-      Utils.configEnvBasedRefSecrets(config.driverSecretConfig))
-    Utils.verifyEnvBasedRefSecrets(launchedTasks)
-  }
-
-  test("Creates an env-based value secrets.") {
-    val launchedTasks = launchDriverTask(
-      Utils.configEnvBasedValueSecrets(config.driverSecretConfig))
-    Utils.verifyEnvBasedValueSecrets(launchedTasks)
-  }
-
-  test("Creates file-based reference secrets.") {
-    val launchedTasks = launchDriverTask(
-      Utils.configFileBasedRefSecrets(config.driverSecretConfig))
-    Utils.verifyFileBasedRefSecrets(launchedTasks)
-  }
-
-  test("Creates a file-based value secrets.") {
-    val launchedTasks = launchDriverTask(
-      Utils.configFileBasedValueSecrets(config.driverSecretConfig))
-    Utils.verifyFileBasedValueSecrets(launchedTasks)
-  }
-
-  test("assembles a valid driver command, escaping all confs and args") {
-    setScheduler()
-
-    val mem = 1000
-    val cpu = 1
-    val driverDesc = new MesosDriverDescription(
-      "d1",
-      "jar",
-      mem,
-      cpu,
-      true,
-      new Command(
-        "Main",
-        Seq("--a=$2", "--b", "x y z"),
-        Map(),
-        Seq(),
-        Seq(),
-        Seq()),
-      Map("spark.app.name" -> "app name",
-        config.EXECUTOR_URI.key -> "s3a://bucket/spark-version.tgz",
-        "another.conf" -> "\\value"),
-      "s1",
-      new Date())
-
-    val expectedCmd = "cd spark-version*;  " +
-        "bin/spark-submit --name \"app name\" --master mesos://mesos://localhost:5050 " +
-        "--driver-cores 1.0 --driver-memory 1000M --class Main --py-files  " +
-        "--conf spark.executor.uri=s3a://bucket/spark-version.tgz " +
-        "--conf \"another.conf=\\\\value\" " +
-        "--conf \"spark.app.name=app name\" " +
-        "../jar " +
-        "\"--a=\\$2\" " +
-        "--b \"x y z\""
-
-    assert(scheduler.getDriverCommandValue(driverDesc) == expectedCmd)
-  }
-
-  private def launchDriverTask(addlSparkConfVars: Map[String, String]): List[TaskInfo] = {
-    setScheduler()
-    val mem = 1000
-    val cpu = 1
-    val driverDesc = new MesosDriverDescription(
-      "d1",
-      "jar",
-      mem,
-      cpu,
-      true,
-      command,
-      Map(config.EXECUTOR_HOME.key -> "test",
-        "spark.app.name" -> "test") ++
-        addlSparkConfVars,
-      "s1",
-      new Date())
-    val response = scheduler.submitDriver(driverDesc)
-    assert(response.success)
-    val offer = Utils.createOffer("o1", "s1", mem, cpu)
-    scheduler.resourceOffers(driver, Collections.singletonList(offer))
-    Utils.verifyTaskLaunched(driver, "o1")
   }
 }

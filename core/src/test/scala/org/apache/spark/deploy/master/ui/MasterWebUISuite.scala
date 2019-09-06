@@ -53,11 +53,8 @@ class MasterWebUISuite extends SparkFunSuite with BeforeAndAfterAll {
   }
 
   override def afterAll() {
-    try {
-      masterWebUI.stop()
-    } finally {
-      super.afterAll()
-    }
+    masterWebUI.stop()
+    super.afterAll()
   }
 
   test("kill application") {

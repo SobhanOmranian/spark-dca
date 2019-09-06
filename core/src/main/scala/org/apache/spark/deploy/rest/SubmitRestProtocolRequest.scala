@@ -19,7 +19,6 @@ package org.apache.spark.deploy.rest
 
 import scala.util.Try
 
-import org.apache.spark.internal.config
 import org.apache.spark.util.Utils
 
 /**
@@ -50,11 +49,11 @@ private[rest] class CreateSubmissionRequest extends SubmitRestProtocolRequest {
     assertFieldIsSet(appArgs, "appArgs")
     assertFieldIsSet(environmentVariables, "environmentVariables")
     assertPropertyIsSet("spark.app.name")
-    assertPropertyIsBoolean(config.DRIVER_SUPERVISE.key)
-    assertPropertyIsNumeric(config.DRIVER_CORES.key)
-    assertPropertyIsNumeric(config.CORES_MAX.key)
-    assertPropertyIsMemory(config.DRIVER_MEMORY.key)
-    assertPropertyIsMemory(config.EXECUTOR_MEMORY.key)
+    assertPropertyIsBoolean("spark.driver.supervise")
+    assertPropertyIsNumeric("spark.driver.cores")
+    assertPropertyIsNumeric("spark.cores.max")
+    assertPropertyIsMemory("spark.driver.memory")
+    assertPropertyIsMemory("spark.executor.memory")
   }
 
   private def assertPropertyIsSet(key: String): Unit =

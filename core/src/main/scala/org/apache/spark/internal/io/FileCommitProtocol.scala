@@ -20,18 +20,16 @@ package org.apache.spark.internal.io
 import org.apache.hadoop.fs._
 import org.apache.hadoop.mapreduce._
 
-import org.apache.spark.internal.Logging
 import org.apache.spark.util.Utils
 
 
 /**
- * An interface to define how a single Spark job commits its outputs. Three notes:
+ * An interface to define how a single Spark job commits its outputs. Two notes:
  *
  * 1. Implementations must be serializable, as the committer instance instantiated on the driver
  *    will be used for tasks on executors.
- * 2. Implementations should have a constructor with 2 or 3 arguments:
- *      (jobId: String, path: String) or
- *      (jobId: String, path: String, dynamicPartitionOverwrite: Boolean)
+ * 2. Implementations should have a constructor with either 2 or 3 arguments:
+ *    (jobId: String, path: String) or (jobId: String, path: String, isAppend: Boolean).
  * 3. A committer should not be reused across multiple Spark jobs.
  *
  * The proper call sequence is:
@@ -42,7 +40,7 @@ import org.apache.spark.util.Utils
  * 3. When all necessary tasks completed successfully, the driver calls commitJob. If the job
  *    failed to execute (e.g. too many failed tasks), the job should call abortJob.
  */
-abstract class FileCommitProtocol extends Logging {
+abstract class FileCommitProtocol {
   import FileCommitProtocol._
 
   /**
@@ -129,13 +127,11 @@ abstract class FileCommitProtocol extends Logging {
    * before the job has finished. These same task commit messages will be passed to commitJob()
    * if the entire job succeeds.
    */
-  def onTaskCommit(taskCommit: TaskCommitMessage): Unit = {
-    logDebug(s"onTaskCommit($taskCommit)")
-  }
+  def onTaskCommit(taskCommit: TaskCommitMessage): Unit = {}
 }
 
 
-object FileCommitProtocol extends Logging {
+object FileCommitProtocol {
   class TaskCommitMessage(val obj: Any) extends Serializable
 
   object EmptyTaskCommitMessage extends TaskCommitMessage(null)
@@ -143,28 +139,17 @@ object FileCommitProtocol extends Logging {
   /**
    * Instantiates a FileCommitProtocol using the given className.
    */
-  def instantiate(
-      className: String,
-      jobId: String,
-      outputPath: String,
-      dynamicPartitionOverwrite: Boolean = false): FileCommitProtocol = {
+  def instantiate(className: String, jobId: String, outputPath: String, isAppend: Boolean)
+    : FileCommitProtocol = {
+    val clazz = Utils.classForName(className).asInstanceOf[Class[FileCommitProtocol]]
 
-    logDebug(s"Creating committer $className; job $jobId; output=$outputPath;" +
-      s" dynamic=$dynamicPartitionOverwrite")
-    val clazz = Utils.classForName[FileCommitProtocol](className)
-    // First try the constructor with arguments (jobId: String, outputPath: String,
-    // dynamicPartitionOverwrite: Boolean).
+    // First try the one with argument (jobId: String, outputPath: String, isAppend: Boolean).
     // If that doesn't exist, try the one with (jobId: string, outputPath: String).
     try {
       val ctor = clazz.getDeclaredConstructor(classOf[String], classOf[String], classOf[Boolean])
-      logDebug("Using (String, String, Boolean) constructor")
-      ctor.newInstance(jobId, outputPath, dynamicPartitionOverwrite.asInstanceOf[java.lang.Boolean])
+      ctor.newInstance(jobId, outputPath, isAppend.asInstanceOf[java.lang.Boolean])
     } catch {
       case _: NoSuchMethodException =>
-        logDebug("Falling back to (String, String) constructor")
-        require(!dynamicPartitionOverwrite,
-          "Dynamic Partition Overwrite is enabled but" +
-            s" the committer ${className} does not have the appropriate constructor")
         val ctor = clazz.getDeclaredConstructor(classOf[String], classOf[String])
         ctor.newInstance(jobId, outputPath)
     }

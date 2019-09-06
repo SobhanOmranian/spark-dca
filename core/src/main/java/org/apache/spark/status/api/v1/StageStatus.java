@@ -23,8 +23,7 @@ public enum StageStatus {
   ACTIVE,
   COMPLETE,
   FAILED,
-  PENDING,
-  SKIPPED;
+  PENDING;
 
   public static StageStatus fromString(String str) {
     return EnumUtil.parseIgnoreCase(StageStatus.class, str);

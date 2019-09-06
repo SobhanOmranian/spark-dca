@@ -21,18 +21,18 @@ import javax.servlet.http.HttpServletRequest
 
 import scala.xml._
 
-import org.apache.commons.text.StringEscapeUtils
+import org.apache.commons.lang3.StringEscapeUtils
 
-import org.apache.spark.status.api.v1.{JobData, StageData}
 import org.apache.spark.streaming.Time
 import org.apache.spark.streaming.ui.StreamingJobProgressListener.SparkJobId
 import org.apache.spark.ui.{UIUtils => SparkUIUtils, WebUIPage}
+import org.apache.spark.ui.jobs.UIData.JobUIData
 
-private[ui] case class SparkJobIdWithUIData(sparkJobId: SparkJobId, jobData: Option[JobData])
+private[ui] case class SparkJobIdWithUIData(sparkJobId: SparkJobId, jobUIData: Option[JobUIData])
 
 private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
   private val streamingListener = parent.listener
-  private val store = parent.parent.store
+  private val sparkListener = parent.ssc.sc.jobProgressListener
 
   private def columns: Seq[Node] = {
     <th>Output Op Id</th>
@@ -47,19 +47,18 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
   }
 
   private def generateJobRow(
-      request: HttpServletRequest,
       outputOpData: OutputOperationUIData,
       outputOpDescription: Seq[Node],
       formattedOutputOpDuration: String,
       numSparkJobRowsInOutputOp: Int,
       isFirstRow: Boolean,
-      jobIdWithData: SparkJobIdWithUIData): Seq[Node] = {
-    if (jobIdWithData.jobData.isDefined) {
-      generateNormalJobRow(request, outputOpData, outputOpDescription, formattedOutputOpDuration,
-        numSparkJobRowsInOutputOp, isFirstRow, jobIdWithData.jobData.get)
+      sparkJob: SparkJobIdWithUIData): Seq[Node] = {
+    if (sparkJob.jobUIData.isDefined) {
+      generateNormalJobRow(outputOpData, outputOpDescription, formattedOutputOpDuration,
+        numSparkJobRowsInOutputOp, isFirstRow, sparkJob.jobUIData.get)
     } else {
       generateDroppedJobRow(outputOpData, outputOpDescription, formattedOutputOpDuration,
-        numSparkJobRowsInOutputOp, isFirstRow, jobIdWithData.sparkJobId)
+        numSparkJobRowsInOutputOp, isFirstRow, sparkJob.sparkJobId)
     }
   }
 
@@ -90,26 +89,24 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
    * one cell, we use "rowspan" for the first row of an output op.
    */
   private def generateNormalJobRow(
-      request: HttpServletRequest,
       outputOpData: OutputOperationUIData,
       outputOpDescription: Seq[Node],
       formattedOutputOpDuration: String,
       numSparkJobRowsInOutputOp: Int,
       isFirstRow: Boolean,
-      sparkJob: JobData): Seq[Node] = {
+      sparkJob: JobUIData): Seq[Node] = {
     val duration: Option[Long] = {
       sparkJob.submissionTime.map { start =>
-        val end = sparkJob.completionTime.map(_.getTime()).getOrElse(System.currentTimeMillis())
-        end - start.getTime()
+        val end = sparkJob.completionTime.getOrElse(System.currentTimeMillis())
+        end - start
       }
     }
     val lastFailureReason =
-      sparkJob.stageIds.sorted(Ordering.Int.reverse).flatMap(getStageData).
+      sparkJob.stageIds.sorted.reverse.flatMap(sparkListener.stageIdToInfo.get).
       dropWhile(_.failureReason == None).take(1). // get the first info that contains failure
       flatMap(info => info.failureReason).headOption.getOrElse("")
     val formattedDuration = duration.map(d => SparkUIUtils.formatDuration(d)).getOrElse("-")
-    val detailUrl = s"${SparkUIUtils.prependBaseUri(
-      request, parent.basePath)}/jobs/job/?id=${sparkJob.jobId}"
+    val detailUrl = s"${SparkUIUtils.prependBaseUri(parent.basePath)}/jobs/job?id=${sparkJob.jobId}"
 
     // In the first row, output op id and its information needs to be shown. In other rows, these
     // cells will be taken up due to "rowspan".
@@ -138,7 +135,7 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
         {formattedDuration}
       </td>
       <td class="stage-progress-cell">
-        {sparkJob.numCompletedStages}/{sparkJob.stageIds.size - sparkJob.numSkippedStages}
+        {sparkJob.completedStageIndices.size}/{sparkJob.stageIds.size - sparkJob.numSkippedStages}
         {if (sparkJob.numFailedStages > 0) s"(${sparkJob.numFailedStages} failed)"}
         {if (sparkJob.numSkippedStages > 0) s"(${sparkJob.numSkippedStages} skipped)"}
       </td>
@@ -149,7 +146,7 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
             completed = sparkJob.numCompletedTasks,
             failed = sparkJob.numFailedTasks,
             skipped = sparkJob.numSkippedTasks,
-            reasonToNumKilled = sparkJob.killedTasksSummary,
+            reasonToNumKilled = sparkJob.reasonToNumKilled,
             total = sparkJob.numTasks - sparkJob.numSkippedTasks)
         }
       </td>
@@ -199,7 +196,6 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
   }
 
   private def generateOutputOpIdRow(
-      request: HttpServletRequest,
       outputOpData: OutputOperationUIData,
       sparkJobs: Seq[SparkJobIdWithUIData]): Seq[Node] = {
     val formattedOutputOpDuration =
@@ -216,7 +212,6 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
     } else {
       val firstRow =
         generateJobRow(
-          request,
           outputOpData,
           description,
           formattedOutputOpDuration,
@@ -226,7 +221,6 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
       val tailRows =
         sparkJobs.tail.map { sparkJob =>
           generateJobRow(
-            request,
             outputOpData,
             description,
             formattedOutputOpDuration,
@@ -252,19 +246,11 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
     </div>
   }
 
-  private def getJobData(sparkJobId: SparkJobId): Option[JobData] = {
-    try {
-      Some(store.job(sparkJobId))
-    } catch {
-      case _: NoSuchElementException => None
-    }
-  }
-
-  private def getStageData(stageId: Int): Option[StageData] = {
-    try {
-      Some(store.lastStageAttempt(stageId))
-    } catch {
-      case _: NoSuchElementException => None
+  private def getJobData(sparkJobId: SparkJobId): Option[JobUIData] = {
+    sparkListener.activeJobs.get(sparkJobId).orElse {
+      sparkListener.completedJobs.find(_.jobId == sparkJobId).orElse {
+        sparkListener.failedJobs.find(_.jobId == sparkJobId)
+      }
     }
   }
 
@@ -284,9 +270,7 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
   /**
    * Generate the job table for the batch.
    */
-  private def generateJobTable(
-      request: HttpServletRequest,
-      batchUIData: BatchUIData): Seq[Node] = {
+  private def generateJobTable(batchUIData: BatchUIData): Seq[Node] = {
     val outputOpIdToSparkJobIds = batchUIData.outputOpIdSparkJobIdPairs.groupBy(_.outputOpId).
       map { case (outputOpId, outputOpIdAndSparkJobIds) =>
         // sort SparkJobIds for each OutputOpId
@@ -298,29 +282,34 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
         val sparkJobIds = outputOpIdToSparkJobIds.getOrElse(outputOpId, Seq.empty)
         (outputOperation, sparkJobIds)
       }.toSeq.sortBy(_._1.id)
-    val outputOpWithJobs = outputOps.map { case (outputOpData, sparkJobIds) =>
-        (outputOpData, sparkJobIds.map { jobId => SparkJobIdWithUIData(jobId, getJobData(jobId)) })
-      }
-
-    <table id="batch-job-table" class="table table-bordered table-striped table-condensed">
-      <thead>
-        {columns}
-      </thead>
-      <tbody>
-        {
-          outputOpWithJobs.map { case (outputOpData, sparkJobs) =>
-            generateOutputOpIdRow(request, outputOpData, sparkJobs)
-          }
+    sparkListener.synchronized {
+      val outputOpWithJobs = outputOps.map { case (outputOpData, sparkJobIds) =>
+          (outputOpData,
+            sparkJobIds.map(sparkJobId => SparkJobIdWithUIData(sparkJobId, getJobData(sparkJobId))))
         }
-      </tbody>
-    </table>
+
+      <table id="batch-job-table" class="table table-bordered table-striped table-condensed">
+        <thead>
+          {columns}
+        </thead>
+        <tbody>
+          {
+            outputOpWithJobs.map { case (outputOpData, sparkJobIds) =>
+              generateOutputOpIdRow(outputOpData, sparkJobIds)
+            }
+          }
+        </tbody>
+      </table>
+    }
   }
 
   def render(request: HttpServletRequest): Seq[Node] = streamingListener.synchronized {
-    val batchTime = Option(request.getParameter("id")).map(id => Time(id.toLong))
+    // stripXSS is called first to remove suspicious characters used in XSS attacks
+    val batchTime =
+      Option(SparkUIUtils.stripXSS(request.getParameter("id"))).map(id => Time(id.toLong))
       .getOrElse {
-        throw new IllegalArgumentException(s"Missing id parameter")
-      }
+      throw new IllegalArgumentException(s"Missing id parameter")
+    }
     val formattedBatchTime =
       UIUtils.formatBatchTime(batchTime.milliseconds, streamingListener.batchDuration)
 
@@ -370,10 +359,9 @@ private[ui] class BatchPage(parent: StreamingTab) extends WebUIPage("batch") {
         </ul>
       </div>
 
-    val content = summary ++ generateJobTable(request, batchUIData)
+    val content = summary ++ generateJobTable(batchUIData)
 
-    SparkUIUtils.headerSparkPage(
-      request, s"Details of batch at $formattedBatchTime", content, parent)
+    SparkUIUtils.headerSparkPage(s"Details of batch at $formattedBatchTime", content, parent)
   }
 
   def generateInputMetadataTable(inputMetadatas: Seq[(Int, String)]): Seq[Node] = {

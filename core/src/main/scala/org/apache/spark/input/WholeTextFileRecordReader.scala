@@ -69,7 +69,7 @@ private[spark] class WholeTextFileRecordReader(
 
   override def nextKeyValue(): Boolean = {
     if (!processed) {
-      val conf = getConf
+      val conf = new Configuration
       val factory = new CompressionCodecFactory(conf)
       val codec = factory.getCodec(path)  // infers from file ext.
       val fileIn = fs.open(path)
@@ -108,17 +108,8 @@ private[spark] class ConfigurableCombineFileRecordReader[K, V](
   override def initNextRecordReader(): Boolean = {
     val r = super.initNextRecordReader()
     if (r) {
-      if (getConf != null) {
-        this.curReader.asInstanceOf[HConfigurable].setConf(getConf)
-      }
+      this.curReader.asInstanceOf[HConfigurable].setConf(getConf)
     }
     r
-  }
-
-  override def setConf(c: Configuration): Unit = {
-    super.setConf(c)
-    if (this.curReader != null) {
-      this.curReader.asInstanceOf[HConfigurable].setConf(c)
-    }
   }
 }

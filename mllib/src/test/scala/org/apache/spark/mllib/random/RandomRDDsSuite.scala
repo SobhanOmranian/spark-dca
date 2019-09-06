@@ -23,13 +23,14 @@ import org.apache.spark.SparkFunSuite
 import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.mllib.rdd.{RandomRDD, RandomRDDPartition}
 import org.apache.spark.mllib.util.MLlibTestSparkContext
-import org.apache.spark.mllib.util.TestingUtils._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.StatCounter
 
 /*
  * Note: avoid including APIs that do not set the seed for the RNG in unit tests
  * in order to guarantee deterministic behavior.
+ *
+ * TODO update tests to use TestingUtils for floating point comparison after PR 1367 is merged
  */
 class RandomRDDsSuite extends SparkFunSuite with MLlibTestSparkContext with Serializable {
 
@@ -42,8 +43,8 @@ class RandomRDDsSuite extends SparkFunSuite with MLlibTestSparkContext with Seri
     val stats = rdd.stats()
     assert(expectedSize === stats.count)
     assert(expectedNumPartitions === rdd.partitions.size)
-    assert(stats.mean ~== expectedMean absTol epsilon)
-    assert(stats.stdev ~== expectedStddev absTol epsilon)
+    assert(math.abs(stats.mean - expectedMean) < epsilon)
+    assert(math.abs(stats.stdev - expectedStddev) < epsilon)
   }
 
   // assume test RDDs are small
@@ -62,8 +63,8 @@ class RandomRDDsSuite extends SparkFunSuite with MLlibTestSparkContext with Seri
     }}
     assert(expectedRows === values.size / expectedColumns)
     val stats = new StatCounter(values)
-    assert(stats.mean ~== expectedMean absTol epsilon)
-    assert(stats.stdev ~== expectedStddev absTol epsilon)
+    assert(math.abs(stats.mean - expectedMean) < epsilon)
+    assert(math.abs(stats.stdev - expectedStddev) < epsilon)
   }
 
   test("RandomRDD sizes") {

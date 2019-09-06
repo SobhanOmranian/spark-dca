@@ -24,18 +24,21 @@ import org.apache.kafka.clients.producer.ProducerConfig
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.scalatest.time.SpanSugar._
 
-import org.apache.spark.{SparkConf, SparkException, TestUtils}
+import org.apache.spark.SparkException
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.expressions.{AttributeReference, SpecificInternalRow, UnsafeProjection}
 import org.apache.spark.sql.execution.streaming.MemoryStream
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming._
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 import org.apache.spark.sql.types.{BinaryType, DataType}
 
-abstract class KafkaSinkSuiteBase extends QueryTest with SharedSparkSession with KafkaTest {
+class KafkaSinkSuite extends StreamTest with SharedSQLContext {
+  import testImplicits._
+
   protected var testUtils: KafkaTestUtils = _
+
+  override val streamingTimeout = 30.seconds
 
   override def beforeAll(): Unit = {
     super.beforeAll()
@@ -45,35 +48,81 @@ abstract class KafkaSinkSuiteBase extends QueryTest with SharedSparkSession with
   }
 
   override def afterAll(): Unit = {
-    try {
-      if (testUtils != null) {
-        testUtils.teardown()
-        testUtils = null
-      }
-    } finally {
+    if (testUtils != null) {
+      testUtils.teardown()
+      testUtils = null
       super.afterAll()
     }
   }
 
-  private val topicId = new AtomicInteger(0)
-
-  protected def newTopic(): String = s"topic-${topicId.getAndIncrement()}"
-
-  protected def createKafkaReader(topic: String): DataFrame = {
-    spark.read
+  test("batch - write to kafka") {
+    val topic = newTopic()
+    testUtils.createTopic(topic)
+    val df = Seq("1", "2", "3", "4", "5").map(v => (topic, v)).toDF("topic", "value")
+    df.write
       .format("kafka")
       .option("kafka.bootstrap.servers", testUtils.brokerAddress)
-      .option("startingOffsets", "earliest")
-      .option("endingOffsets", "latest")
-      .option("subscribe", topic)
-      .load()
+      .option("topic", topic)
+      .save()
+    checkAnswer(
+      createKafkaReader(topic).selectExpr("CAST(value as STRING) value"),
+      Row("1") :: Row("2") :: Row("3") :: Row("4") :: Row("5") :: Nil)
   }
-}
 
-class KafkaSinkStreamingSuite extends KafkaSinkSuiteBase with StreamTest {
-  import testImplicits._
+  test("batch - null topic field value, and no topic option") {
+    val df = Seq[(String, String)](null.asInstanceOf[String] -> "1").toDF("topic", "value")
+    val ex = intercept[SparkException] {
+      df.write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", testUtils.brokerAddress)
+        .save()
+    }
+    assert(ex.getMessage.toLowerCase(Locale.ROOT).contains(
+      "null topic present in the data"))
+  }
 
-  override val streamingTimeout = 30.seconds
+  test("batch - unsupported save modes") {
+    val topic = newTopic()
+    testUtils.createTopic(topic)
+    val df = Seq[(String, String)](null.asInstanceOf[String] -> "1").toDF("topic", "value")
+
+    // Test bad save mode Ignore
+    var ex = intercept[AnalysisException] {
+      df.write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", testUtils.brokerAddress)
+        .mode(SaveMode.Ignore)
+        .save()
+    }
+    assert(ex.getMessage.toLowerCase(Locale.ROOT).contains(
+      s"save mode ignore not allowed for kafka"))
+
+    // Test bad save mode Overwrite
+    ex = intercept[AnalysisException] {
+      df.write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", testUtils.brokerAddress)
+        .mode(SaveMode.Overwrite)
+        .save()
+    }
+    assert(ex.getMessage.toLowerCase(Locale.ROOT).contains(
+      s"save mode overwrite not allowed for kafka"))
+  }
+
+  test("SPARK-20496: batch - enforce analyzed plans") {
+    val inputEvents =
+      spark.range(1, 1000)
+        .select(to_json(struct("*")) as 'value)
+
+    val topic = newTopic()
+    testUtils.createTopic(topic)
+    // used to throw UnresolvedException
+    inputEvents.write
+      .format("kafka")
+      .option("kafka.bootstrap.servers", testUtils.brokerAddress)
+      .option("topic", topic)
+      .save()
+  }
 
   test("streaming - write to kafka with topic field") {
     val input = MemoryStream[String]
@@ -89,7 +138,7 @@ class KafkaSinkStreamingSuite extends KafkaSinkSuiteBase with StreamTest {
     val reader = createKafkaReader(topic)
       .selectExpr("CAST(key as STRING) key", "CAST(value as STRING) value")
       .selectExpr("CAST(key as INT) key", "CAST(value as INT) value")
-      .as[(Option[Int], Int)]
+      .as[(Int, Int)]
       .map(_._2)
 
     try {
@@ -180,27 +229,6 @@ class KafkaSinkStreamingSuite extends KafkaSinkSuiteBase with StreamTest {
     }
   }
 
-  test("streaming - sink progress is produced") {
-    /* ensure sink progress is correctly produced. */
-    val input = MemoryStream[String]
-    val topic = newTopic()
-    testUtils.createTopic(topic)
-
-    val writer = createKafkaWriter(
-      input.toDF(),
-      withTopic = Some(topic),
-      withOutputMode = Some(OutputMode.Update()))()
-
-    try {
-      input.addData("1", "2", "3")
-      failAfter(streamingTimeout) {
-        writer.processAllAvailable()
-      }
-      assert(writer.lastProgress.sink.numOutputRows == 3L)
-    } finally {
-      writer.stop()
-    }
-  }
 
   test("streaming - write data with bad schema") {
     val input = MemoryStream[String]
@@ -275,7 +303,7 @@ class KafkaSinkStreamingSuite extends KafkaSinkSuiteBase with StreamTest {
       writer.stop()
     }
     assert(ex.getMessage.toLowerCase(Locale.ROOT).contains(
-      "value attribute type must be a string or binary"))
+      "value attribute type must be a string or binarytype"))
 
     try {
       ex = intercept[StreamingQueryException] {
@@ -290,7 +318,7 @@ class KafkaSinkStreamingSuite extends KafkaSinkSuiteBase with StreamTest {
       writer.stop()
     }
     assert(ex.getMessage.toLowerCase(Locale.ROOT).contains(
-      "key attribute type must be a string or binary"))
+      "key attribute type must be a string or binarytype"))
   }
 
   test("streaming - write to non-existing topic") {
@@ -308,140 +336,28 @@ class KafkaSinkStreamingSuite extends KafkaSinkSuiteBase with StreamTest {
     } finally {
       writer.stop()
     }
-    assert(ex.getCause.getCause.getMessage.toLowerCase(Locale.ROOT).contains("job aborted"))
+    assert(ex.getMessage.toLowerCase(Locale.ROOT).contains("job aborted"))
   }
 
   test("streaming - exception on config serializer") {
     val input = MemoryStream[String]
     var writer: StreamingQuery = null
     var ex: Exception = null
-    ex = intercept[StreamingQueryException] {
+    ex = intercept[IllegalArgumentException] {
       writer = createKafkaWriter(
         input.toDF(),
         withOptions = Map("kafka.key.serializer" -> "foo"))()
-      input.addData("1")
-      writer.processAllAvailable()
     }
-    assert(ex.getCause.getMessage.toLowerCase(Locale.ROOT).contains(
+    assert(ex.getMessage.toLowerCase(Locale.ROOT).contains(
       "kafka option 'key.serializer' is not supported"))
 
-    ex = intercept[StreamingQueryException] {
+    ex = intercept[IllegalArgumentException] {
       writer = createKafkaWriter(
         input.toDF(),
         withOptions = Map("kafka.value.serializer" -> "foo"))()
-      input.addData("1")
-      writer.processAllAvailable()
     }
-    assert(ex.getCause.getMessage.toLowerCase(Locale.ROOT).contains(
+    assert(ex.getMessage.toLowerCase(Locale.ROOT).contains(
       "kafka option 'value.serializer' is not supported"))
-  }
-
-  private def createKafkaWriter(
-      input: DataFrame,
-      withTopic: Option[String] = None,
-      withOutputMode: Option[OutputMode] = None,
-      withOptions: Map[String, String] = Map[String, String]())
-      (withSelectExpr: String*): StreamingQuery = {
-    var stream: DataStreamWriter[Row] = null
-    withTempDir { checkpointDir =>
-      var df = input.toDF()
-      if (withSelectExpr.length > 0) {
-        df = df.selectExpr(withSelectExpr: _*)
-      }
-      stream = df.writeStream
-        .format("kafka")
-        .option("checkpointLocation", checkpointDir.getCanonicalPath)
-        .option("kafka.bootstrap.servers", testUtils.brokerAddress)
-        .option("kafka.max.block.ms", "5000")
-        .queryName("kafkaStream")
-      withTopic.foreach(stream.option("topic", _))
-      withOutputMode.foreach(stream.outputMode(_))
-      withOptions.foreach(opt => stream.option(opt._1, opt._2))
-    }
-    stream.start()
-  }
-}
-
-abstract class KafkaSinkBatchSuiteBase extends KafkaSinkSuiteBase {
-  import testImplicits._
-
-  test("batch - write to kafka") {
-    val topic = newTopic()
-    testUtils.createTopic(topic)
-    val df = Seq("1", "2", "3", "4", "5").map(v => (topic, v)).toDF("topic", "value")
-    df.write
-      .format("kafka")
-      .option("kafka.bootstrap.servers", testUtils.brokerAddress)
-      .option("topic", topic)
-      .save()
-    checkAnswer(
-      createKafkaReader(topic).selectExpr("CAST(value as STRING) value"),
-      Row("1") :: Row("2") :: Row("3") :: Row("4") :: Row("5") :: Nil)
-  }
-
-  test("batch - null topic field value, and no topic option") {
-    val df = Seq[(String, String)](null.asInstanceOf[String] -> "1").toDF("topic", "value")
-    val ex = intercept[SparkException] {
-      df.write
-        .format("kafka")
-        .option("kafka.bootstrap.servers", testUtils.brokerAddress)
-        .save()
-    }
-    TestUtils.assertExceptionMsg(ex, "null topic present in the data")
-  }
-
-  protected def testUnsupportedSaveModes(msg: (SaveMode) => String) {
-    val topic = newTopic()
-    testUtils.createTopic(topic)
-    val df = Seq[(String, String)](null.asInstanceOf[String] -> "1").toDF("topic", "value")
-
-    Seq(SaveMode.Ignore, SaveMode.Overwrite).foreach { mode =>
-      val ex = intercept[AnalysisException] {
-        df.write
-          .format("kafka")
-          .option("kafka.bootstrap.servers", testUtils.brokerAddress)
-          .mode(mode)
-          .save()
-      }
-      TestUtils.assertExceptionMsg(ex, msg(mode))
-    }
-  }
-
-  test("SPARK-20496: batch - enforce analyzed plans") {
-    val inputEvents =
-      spark.range(1, 1000)
-        .select(to_json(struct("*")) as 'value)
-
-    val topic = newTopic()
-    testUtils.createTopic(topic)
-    // used to throw UnresolvedException
-    inputEvents.write
-      .format("kafka")
-      .option("kafka.bootstrap.servers", testUtils.brokerAddress)
-      .option("topic", topic)
-      .save()
-  }
-}
-
-class KafkaSinkBatchSuiteV1 extends KafkaSinkBatchSuiteBase {
-  override protected def sparkConf: SparkConf =
-    super
-      .sparkConf
-      .set(SQLConf.USE_V1_SOURCE_LIST, "kafka")
-
-  test("batch - unsupported save modes") {
-    testUnsupportedSaveModes((mode) => s"Save mode ${mode.name} not allowed for Kafka")
-  }
-}
-
-class KafkaSinkBatchSuiteV2 extends KafkaSinkBatchSuiteBase {
-  override protected def sparkConf: SparkConf =
-    super
-      .sparkConf
-      .set(SQLConf.USE_V1_SOURCE_LIST, "")
-
-  test("batch - unsupported save modes") {
-    testUnsupportedSaveModes((mode) => s"cannot be written with ${mode.name} mode")
   }
 
   test("generic - write big data with small producer buffer") {
@@ -472,5 +388,43 @@ class KafkaSinkBatchSuiteV2 extends KafkaSinkBatchSuiteBase {
     } finally {
       writeTask.close()
     }
+  }
+
+  private val topicId = new AtomicInteger(0)
+
+  private def newTopic(): String = s"topic-${topicId.getAndIncrement()}"
+
+  private def createKafkaReader(topic: String): DataFrame = {
+    spark.read
+      .format("kafka")
+      .option("kafka.bootstrap.servers", testUtils.brokerAddress)
+      .option("startingOffsets", "earliest")
+      .option("endingOffsets", "latest")
+      .option("subscribe", topic)
+      .load()
+  }
+
+  private def createKafkaWriter(
+      input: DataFrame,
+      withTopic: Option[String] = None,
+      withOutputMode: Option[OutputMode] = None,
+      withOptions: Map[String, String] = Map[String, String]())
+      (withSelectExpr: String*): StreamingQuery = {
+    var stream: DataStreamWriter[Row] = null
+    withTempDir { checkpointDir =>
+      var df = input.toDF()
+      if (withSelectExpr.length > 0) {
+        df = df.selectExpr(withSelectExpr: _*)
+      }
+      stream = df.writeStream
+        .format("kafka")
+        .option("checkpointLocation", checkpointDir.getCanonicalPath)
+        .option("kafka.bootstrap.servers", testUtils.brokerAddress)
+        .queryName("kafkaStream")
+      withTopic.foreach(stream.option("topic", _))
+      withOutputMode.foreach(stream.outputMode(_))
+      withOptions.foreach(opt => stream.option(opt._1, opt._2))
+    }
+    stream.start()
   }
 }

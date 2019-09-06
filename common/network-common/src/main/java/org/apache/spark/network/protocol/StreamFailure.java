@@ -33,7 +33,7 @@ public final class StreamFailure extends AbstractMessage implements ResponseMess
   }
 
   @Override
-  public Message.Type type() { return Type.StreamFailure; }
+  public Type type() { return Type.StreamFailure; }
 
   @Override
   public int encodedLength() {

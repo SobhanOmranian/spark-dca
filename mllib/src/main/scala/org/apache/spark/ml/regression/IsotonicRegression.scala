@@ -27,7 +27,6 @@ import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.regression.IsotonicRegressionModel.IsotonicRegressionModelWriter
 import org.apache.spark.ml.util._
-import org.apache.spark.ml.util.Instrumentation.instrumented
 import org.apache.spark.mllib.regression.{IsotonicRegression => MLlibIsotonicRegression}
 import org.apache.spark.mllib.regression.{IsotonicRegressionModel => MLlibIsotonicRegressionModel}
 import org.apache.spark.rdd.RDD
@@ -162,16 +161,15 @@ class IsotonicRegression @Since("1.5.0") (@Since("1.5.0") override val uid: Stri
   override def copy(extra: ParamMap): IsotonicRegression = defaultCopy(extra)
 
   @Since("2.0.0")
-  override def fit(dataset: Dataset[_]): IsotonicRegressionModel = instrumented { instr =>
+  override def fit(dataset: Dataset[_]): IsotonicRegressionModel = {
     transformSchema(dataset.schema, logging = true)
     // Extract columns from data.  If dataset is persisted, do not persist oldDataset.
     val instances = extractWeightedLabeledPoints(dataset)
     val handlePersistence = dataset.storageLevel == StorageLevel.NONE
     if (handlePersistence) instances.persist(StorageLevel.MEMORY_AND_DISK)
 
-    instr.logPipelineStage(this)
-    instr.logDataset(dataset)
-    instr.logParams(this, labelCol, featuresCol, weightCol, predictionCol, featureIndex, isotonic)
+    val instr = Instrumentation.create(this, dataset)
+    instr.logParams(labelCol, featuresCol, weightCol, predictionCol, featureIndex, isotonic)
     instr.logNumFeatures(1)
 
     val isotonicRegression = new MLlibIsotonicRegression().setIsotonic($(isotonic))
@@ -179,7 +177,9 @@ class IsotonicRegression @Since("1.5.0") (@Since("1.5.0") override val uid: Stri
 
     if (handlePersistence) instances.unpersist()
 
-    copyValues(new IsotonicRegressionModel(uid, oldModel).setParent(this))
+    val model = copyValues(new IsotonicRegressionModel(uid, oldModel).setParent(this))
+    instr.logSuccess(model)
+    model
   }
 
   @Since("1.5.0")
@@ -308,7 +308,7 @@ object IsotonicRegressionModel extends MLReadable[IsotonicRegressionModel] {
       val model = new IsotonicRegressionModel(
         metadata.uid, new MLlibIsotonicRegressionModel(boundaries, predictions, isotonic))
 
-      metadata.getAndSetParams(model)
+      DefaultParamsReader.getAndSetParams(model, metadata)
       model
     }
   }

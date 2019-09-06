@@ -19,7 +19,7 @@
 package org.apache.spark.examples.ml
 
 // $example on$
-import org.apache.spark.ml.classification.LogisticRegression
+import org.apache.spark.ml.classification.{BinaryLogisticRegressionSummary, LogisticRegression}
 // $example off$
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.max
@@ -47,20 +47,25 @@ object LogisticRegressionSummaryExample {
     // $example on$
     // Extract the summary from the returned LogisticRegressionModel instance trained in the earlier
     // example
-    val trainingSummary = lrModel.binarySummary
+    val trainingSummary = lrModel.summary
 
     // Obtain the objective per iteration.
     val objectiveHistory = trainingSummary.objectiveHistory
     println("objectiveHistory:")
     objectiveHistory.foreach(loss => println(loss))
 
+    // Obtain the metrics useful to judge performance on test data.
+    // We cast the summary to a BinaryLogisticRegressionSummary since the problem is a
+    // binary classification problem.
+    val binarySummary = trainingSummary.asInstanceOf[BinaryLogisticRegressionSummary]
+
     // Obtain the receiver-operating characteristic as a dataframe and areaUnderROC.
-    val roc = trainingSummary.roc
+    val roc = binarySummary.roc
     roc.show()
-    println(s"areaUnderROC: ${trainingSummary.areaUnderROC}")
+    println(s"areaUnderROC: ${binarySummary.areaUnderROC}")
 
     // Set the model threshold to maximize F-Measure
-    val fMeasure = trainingSummary.fMeasureByThreshold
+    val fMeasure = binarySummary.fMeasureByThreshold
     val maxFMeasure = fMeasure.select(max("F-Measure")).head().getDouble(0)
     val bestThreshold = fMeasure.where($"F-Measure" === maxFMeasure)
       .select("threshold").head().getDouble(0)

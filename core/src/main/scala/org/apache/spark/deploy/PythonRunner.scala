@@ -19,10 +19,9 @@ package org.apache.spark.deploy
 
 import java.io.File
 import java.net.{InetAddress, URI}
-import java.nio.file.Files
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.JavaConverters._
 import scala.util.Try
 
 import org.apache.spark.{SparkConf, SparkUserAppException}
@@ -49,7 +48,7 @@ object PythonRunner {
 
     // Format python file paths before adding them to the PYTHONPATH
     val formattedPythonFile = formatPath(pythonFile)
-    val formattedPyFiles = resolvePyFiles(formatPaths(pyFiles))
+    val formattedPyFiles = formatPaths(pyFiles)
 
     // Launch a Py4J gateway server for the process to connect to; this will let it see our
     // Java system properties and such
@@ -60,7 +59,11 @@ object PythonRunner {
       .javaAddress(localhost)
       .callbackClient(py4j.GatewayServer.DEFAULT_PYTHON_PORT, localhost, secret)
       .build()
-    val thread = new Thread(() => Utils.logUncaughtExceptions { gatewayServer.start() })
+    val thread = new Thread(new Runnable() {
+      override def run(): Unit = Utils.logUncaughtExceptions {
+        gatewayServer.start()
+      }
+    })
     thread.setName("py4j-gateway-init")
     thread.setDaemon(true)
     thread.start()
@@ -91,15 +94,6 @@ object PythonRunner {
     // python process is through environment variable.
     sparkConf.get(PYSPARK_PYTHON).foreach(env.put("PYSPARK_PYTHON", _))
     sys.env.get("PYTHONHASHSEED").foreach(env.put("PYTHONHASHSEED", _))
-    // if OMP_NUM_THREADS is not explicitly set, override it with the number of cores
-    if (sparkConf.getOption("spark.yarn.appMasterEnv.OMP_NUM_THREADS").isEmpty &&
-        sparkConf.getOption("spark.mesos.driverEnv.OMP_NUM_THREADS").isEmpty &&
-        sparkConf.getOption("spark.kubernetes.driverEnv.OMP_NUM_THREADS").isEmpty) {
-      // SPARK-28843: limit the OpenMP thread pool to the number of cores assigned to the driver
-      // this avoids high memory consumption with pandas/numpy because of a large OpenMP thread pool
-      // see https://github.com/numpy/numpy/issues/10455
-      sparkConf.getOption("spark.driver.cores").foreach(env.put("OMP_NUM_THREADS", _))
-    }
     builder.redirectErrorStream(true) // Ugly but needed for stdout and stderr to synchronize
     try {
       val process = builder.start()
@@ -159,30 +153,4 @@ object PythonRunner {
       .map { p => formatPath(p, testWindows) }
   }
 
-  /**
-   * Resolves the ".py" files. ".py" file should not be added as is because PYTHONPATH does
-   * not expect a file. This method creates a temporary directory and puts the ".py" files
-   * if exist in the given paths.
-   */
-  private def resolvePyFiles(pyFiles: Array[String]): Array[String] = {
-    lazy val dest = Utils.createTempDir(namePrefix = "localPyFiles")
-    pyFiles.flatMap { pyFile =>
-      // In case of client with submit, the python paths should be set before context
-      // initialization because the context initialization can be done later.
-      // We will copy the local ".py" files because ".py" file shouldn't be added
-      // alone but its parent directory in PYTHONPATH. See SPARK-24384.
-      if (pyFile.endsWith(".py")) {
-        val source = new File(pyFile)
-        if (source.exists() && source.isFile && source.canRead) {
-          Files.copy(source.toPath, new File(dest, source.getName).toPath)
-          Some(dest.getAbsolutePath)
-        } else {
-          // Don't have to add it if it doesn't exist or isn't readable.
-          None
-        }
-      } else {
-        Some(pyFile)
-      }
-    }.distinct
-  }
 }

@@ -105,6 +105,7 @@ trait FutureAction[T] extends Future[T] {
 
 }
 
+
 /**
  * A [[FutureAction]] holding the result of an action that triggers a single job. Examples include
  * count, collect, reduce.
@@ -144,12 +145,6 @@ class SimpleFutureAction[T] private[spark](jobWaiter: JobWaiter[_], resultFunc: 
     jobWaiter.completionFuture.value.map {res => res.map(_ => resultFunc)}
 
   def jobIds: Seq[Int] = Seq(jobWaiter.jobId)
-
-  override def transform[S](f: (Try[T]) => Try[S])(implicit e: ExecutionContext): Future[S] =
-    jobWaiter.completionFuture.transform((u: Try[Unit]) => f(u.map(_ => resultFunc)))
-
-  override def transformWith[S](f: (Try[T]) => Future[S])(implicit e: ExecutionContext): Future[S] =
-    jobWaiter.completionFuture.transformWith((u: Try[Unit]) => f(u.map(_ => resultFunc)))
 }
 
 
@@ -243,11 +238,6 @@ class ComplexFutureAction[T](run : JobSubmitter => Future[T])
 
   def jobIds: Seq[Int] = subActions.flatMap(_.jobIds)
 
-  override def transform[S](f: (Try[T]) => Try[S])(implicit e: ExecutionContext): Future[S] =
-    p.future.transform(f)
-
-  override def transformWith[S](f: (Try[T]) => Future[S])(implicit e: ExecutionContext): Future[S] =
-    p.future.transformWith(f)
 }
 
 

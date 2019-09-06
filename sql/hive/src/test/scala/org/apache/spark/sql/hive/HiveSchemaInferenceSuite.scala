@@ -18,16 +18,15 @@
 package org.apache.spark.sql.hive
 
 import java.io.File
-import java.util.Locale
 
 import scala.util.Random
 
 import org.scalatest.BeforeAndAfterEach
 
-import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.execution.datasources.FileStatusCache
+import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.hive.test.TestHiveSingleton
 import org.apache.spark.sql.internal.{HiveSerDe, SQLConf}
 import org.apache.spark.sql.internal.SQLConf.HiveCaseSensitiveInferenceMode.{Value => InferenceMode, _}
@@ -51,13 +50,12 @@ class HiveSchemaInferenceSuite
     FileStatusCache.resetForTesting()
   }
 
-  private val externalCatalog =
-    spark.sharedState.externalCatalog.unwrapped.asInstanceOf[HiveExternalCatalog]
+  private val externalCatalog = spark.sharedState.externalCatalog.asInstanceOf[HiveExternalCatalog]
   private val client = externalCatalog.client
 
   // Return a copy of the given schema with all field names converted to lower case.
   private def lowerCaseSchema(schema: StructType): StructType = {
-    StructType(schema.map(f => f.copy(name = f.name.toLowerCase(Locale.ROOT))))
+    StructType(schema.map(f => f.copy(name = f.name.toLowerCase)))
   }
 
   // Create a Hive external test table containing the given field and partition column names.
@@ -73,16 +71,16 @@ class HiveSchemaInferenceSuite
         name = field,
         dataType = LongType,
         nullable = true,
-        metadata = Metadata.empty)
+        metadata = new MetadataBuilder().putString(HIVE_TYPE_STRING, "bigint").build())
     }
     // and all partition columns as ints
     val partitionStructFields = partitionCols.map { field =>
       StructField(
         // Partition column case isn't preserved
-        name = field.toLowerCase(Locale.ROOT),
+        name = field.toLowerCase,
         dataType = IntegerType,
         nullable = true,
-        metadata = Metadata.empty)
+        metadata = new MetadataBuilder().putString(HIVE_TYPE_STRING, "int").build())
     }
     val schema = StructType(structFields ++ partitionStructFields)
 
@@ -114,7 +112,7 @@ class HiveSchemaInferenceSuite
           properties = Map("serialization.format" -> "1")),
         schema = schema,
         provider = Option("hive"),
-        partitionColumnNames = partitionCols.map(_.toLowerCase(Locale.ROOT)),
+        partitionColumnNames = partitionCols.map(_.toLowerCase),
         properties = Map.empty),
       true)
 
@@ -181,7 +179,7 @@ class HiveSchemaInferenceSuite
           val catalogTable = externalCatalog.getTable(DATABASE, TEST_TABLE_NAME)
           assert(catalogTable.schemaPreservesCase)
           assert(catalogTable.schema == schema)
-          assert(catalogTable.partitionColumnNames == partCols.map(_.toLowerCase(Locale.ROOT)))
+          assert(catalogTable.partitionColumnNames == partCols.map(_.toLowerCase))
         }
       }
     }
@@ -263,32 +261,6 @@ class HiveSchemaInferenceSuite
         StructType(Seq(StructField("lower", StringType, nullable = false))),
         StructType(Seq(StructField("lowerCase", BinaryType))))
     }
-
-    // Parquet schema is subset of metaStore schema and has uppercase field name
-    assertResult(
-      StructType(Seq(
-        StructField("UPPERCase", DoubleType, nullable = true),
-        StructField("lowerCase", BinaryType, nullable = true)))) {
-
-      HiveMetastoreCatalog.mergeWithMetastoreSchema(
-        StructType(Seq(
-          StructField("UPPERCase", DoubleType, nullable = true),
-          StructField("lowerCase", BinaryType, nullable = true))),
-
-        StructType(Seq(
-          StructField("lowerCase", BinaryType, nullable = true))))
-    }
-
-    // Metastore schema contains additional nullable fields.
-    assert(intercept[Throwable] {
-      HiveMetastoreCatalog.mergeWithMetastoreSchema(
-        StructType(Seq(
-          StructField("UPPERCase", DoubleType, nullable = false),
-          StructField("lowerCase", BinaryType, nullable = true))),
-
-        StructType(Seq(
-          StructField("lowerCase", BinaryType, nullable = true))))
-    }.getMessage.contains("Detected conflicting schemas"))
 
     // Check that merging missing nullable fields works as expected.
     assertResult(

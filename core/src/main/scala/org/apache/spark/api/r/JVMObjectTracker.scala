@@ -17,8 +17,8 @@
 
 package org.apache.spark.api.r
 
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
 
 /** JVM object ID wrapper */
 private[r] case class JVMObjectId(id: String) {
@@ -37,7 +37,13 @@ private[r] class JVMObjectTracker {
   /**
    * Returns the JVM object associated with the input key or None if not found.
    */
-  final def get(id: JVMObjectId): Option[Object] = Option(objMap.get(id))
+  final def get(id: JVMObjectId): Option[Object] = this.synchronized {
+    if (objMap.containsKey(id)) {
+      Some(objMap.get(id))
+    } else {
+      None
+    }
+  }
 
   /**
    * Returns the JVM object associated with the input key or throws an exception if not found.
@@ -61,7 +67,13 @@ private[r] class JVMObjectTracker {
   /**
    * Removes and returns a JVM object with the specific ID from the tracker, or None if not found.
    */
-  final def remove(id: JVMObjectId): Option[Object] = Option(objMap.remove(id))
+  final def remove(id: JVMObjectId): Option[Object] = this.synchronized {
+    if (objMap.containsKey(id)) {
+      Some(objMap.remove(id))
+    } else {
+      None
+    }
+  }
 
   /**
    * Number of JVM objects being tracked.

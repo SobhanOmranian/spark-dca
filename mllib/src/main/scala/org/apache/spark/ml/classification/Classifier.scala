@@ -77,35 +77,15 @@ abstract class Classifier[
    * @note Throws `SparkException` if any label is a non-integer or is negative
    */
   protected def extractLabeledPoints(dataset: Dataset[_], numClasses: Int): RDD[LabeledPoint] = {
-    validateNumClasses(numClasses)
-    dataset.select(col($(labelCol)), col($(featuresCol))).rdd.map {
-      case Row(label: Double, features: Vector) =>
-        validateLabel(label, numClasses)
-        LabeledPoint(label, features)
-    }
-  }
-
-  /**
-   * Validates that number of classes is greater than zero.
-   *
-   * @param numClasses Number of classes label can take.
-   */
-  protected def validateNumClasses(numClasses: Int): Unit = {
     require(numClasses > 0, s"Classifier (in extractLabeledPoints) found numClasses =" +
       s" $numClasses, but requires numClasses > 0.")
-  }
-
-  /**
-   * Validates the label on the classifier is a valid integer in the range [0, numClasses).
-   *
-   * @param label The label to validate.
-   * @param numClasses Number of classes label can take.  Labels must be integers in the range
-   *                  [0, numClasses).
-   */
-  protected def validateLabel(label: Double, numClasses: Int): Unit = {
-    require(label.toLong == label && label >= 0 && label < numClasses, s"Classifier was given" +
-      s" dataset with invalid label $label.  Labels must be integers in range" +
-      s" [0, $numClasses).")
+    dataset.select(col($(labelCol)), col($(featuresCol))).rdd.map {
+      case Row(label: Double, features: Vector) =>
+        require(label % 1 == 0 && label >= 0 && label < numClasses, s"Classifier was given" +
+          s" dataset with invalid label $label.  Labels must be integers in range" +
+          s" [0, $numClasses).")
+        LabeledPoint(label, features)
+    }
   }
 
   /**
@@ -129,7 +109,7 @@ abstract class Classifier[
       case None =>
         // Get number of classes from dataset itself.
         val maxLabelRow: Array[Row] = dataset.select(max($(labelCol))).take(1)
-        if (maxLabelRow.isEmpty || maxLabelRow(0).get(0) == null) {
+        if (maxLabelRow.isEmpty) {
           throw new SparkException("ML algorithm was given empty dataset.")
         }
         val maxDoubleLabel: Double = maxLabelRow.head.getDouble(0)
@@ -204,23 +184,20 @@ abstract class ClassificationModel[FeaturesType, M <: ClassificationModel[Featur
     }
 
     if (numColsOutput == 0) {
-      logWarning(s"$uid: ClassificationModel.transform() does nothing" +
-        " because no output columns were set.")
+      logWarning(s"$uid: ClassificationModel.transform() was called as NOOP" +
+        " since no output columns were set.")
     }
     outputData.toDF
   }
 
-  final override def transformImpl(dataset: Dataset[_]): DataFrame =
-    throw new UnsupportedOperationException(s"transformImpl is not supported in $getClass")
-
   /**
    * Predict label for the given features.
-   * This method is used to implement `transform()` and output [[predictionCol]].
+   * This internal method is used to implement `transform()` and output [[predictionCol]].
    *
    * This default implementation for classification predicts the index of the maximum value
    * from `predictRaw()`.
    */
-  override def predict(features: FeaturesType): Double = {
+  override protected def predict(features: FeaturesType): Double = {
     raw2prediction(predictRaw(features))
   }
 

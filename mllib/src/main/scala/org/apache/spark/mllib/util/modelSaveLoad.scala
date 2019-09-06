@@ -54,6 +54,9 @@ trait Saveable {
   @Since("1.3.0")
   def save(sc: SparkContext, path: String): Unit
 
+  /** Current version of model save/load format. */
+  protected def formatVersion: String
+
 }
 
 /**

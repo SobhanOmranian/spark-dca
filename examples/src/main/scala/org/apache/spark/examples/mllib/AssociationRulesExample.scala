@@ -42,8 +42,9 @@ object AssociationRulesExample {
     val results = ar.run(freqItemsets)
 
     results.collect().foreach { rule =>
-    println(s"[${rule.antecedent.mkString(",")}=>${rule.consequent.mkString(",")} ]" +
-        s" ${rule.confidence}")
+      println("[" + rule.antecedent.mkString(",")
+        + "=>"
+        + rule.consequent.mkString(",") + "]," + rule.confidence)
     }
     // $example off$
 
@@ -52,4 +53,3 @@ object AssociationRulesExample {
 
 }
 // scalastyle:on println
-

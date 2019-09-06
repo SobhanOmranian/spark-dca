@@ -18,8 +18,8 @@
 package org.apache.spark.streaming.receiver
 
 import java.nio.ByteBuffer
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
@@ -159,9 +159,7 @@ private[streaming] class ReceiverSupervisorImpl(
     logDebug(s"Pushed block $blockId in ${(System.currentTimeMillis - time)} ms")
     val numRecords = blockStoreResult.numRecords
     val blockInfo = ReceivedBlockInfo(streamId, numRecords, metadataOption, blockStoreResult)
-    if (!trackerEndpoint.askSync[Boolean](AddBlock(blockInfo))) {
-      throw new SparkException("Failed to add block to receiver tracker.")
-    }
+    trackerEndpoint.askSync[Boolean](AddBlock(blockInfo))
     logDebug(s"Reported block $blockId")
   }
 

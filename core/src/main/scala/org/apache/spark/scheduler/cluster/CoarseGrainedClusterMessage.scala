@@ -20,7 +20,6 @@ package org.apache.spark.scheduler.cluster
 import java.nio.ByteBuffer
 
 import org.apache.spark.TaskState.TaskState
-import org.apache.spark.resource.ResourceInformation
 import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.scheduler.ExecutorLossReason
 import org.apache.spark.util.SerializableBuffer
@@ -33,8 +32,7 @@ private[spark] object CoarseGrainedClusterMessages {
 
   case class SparkAppConfig(
       sparkProperties: Seq[(String, String)],
-      ioEncryptionKey: Option[Array[Byte]],
-      hadoopDelegationCreds: Option[Array[Byte]])
+      ioEncryptionKey: Option[Array[Byte]])
     extends CoarseGrainedClusterMessage
 
   case object RetrieveLastAllocatedExecutorId extends CoarseGrainedClusterMessage
@@ -55,33 +53,23 @@ private[spark] object CoarseGrainedClusterMessages {
   case class RegisterExecutorFailed(message: String) extends CoarseGrainedClusterMessage
     with RegisterExecutorResponse
 
-  case class UpdateDelegationTokens(tokens: Array[Byte])
-    extends CoarseGrainedClusterMessage
-
   // Executors to driver
   case class RegisterExecutor(
       executorId: String,
       executorRef: RpcEndpointRef,
       hostname: String,
       cores: Int,
-      logUrls: Map[String, String],
-      attributes: Map[String, String],
-      resources: Map[String, ResourceInformation])
+      logUrls: Map[String, String])
     extends CoarseGrainedClusterMessage
 
-  case class StatusUpdate(
-      executorId: String,
-      taskId: Long,
-      state: TaskState,
-      data: SerializableBuffer,
-      resources: Map[String, ResourceInformation] = Map.empty)
-    extends CoarseGrainedClusterMessage
+  case class StatusUpdate(executorId: String, taskId: Long, state: TaskState,
+    data: SerializableBuffer) extends CoarseGrainedClusterMessage
 
   object StatusUpdate {
     /** Alternate factory method that takes a ByteBuffer directly for the data field */
-    def apply(executorId: String, taskId: Long, state: TaskState, data: ByteBuffer,
-        resources: Map[String, ResourceInformation]): StatusUpdate = {
-      StatusUpdate(executorId, taskId, state, new SerializableBuffer(data), resources)
+    def apply(executorId: String, taskId: Long, state: TaskState, data: ByteBuffer)
+      : StatusUpdate = {
+      StatusUpdate(executorId, taskId, state, new SerializableBuffer(data))
     }
   }
 
@@ -97,9 +85,6 @@ private[spark] object CoarseGrainedClusterMessages {
   case class RemoveExecutor(executorId: String, reason: ExecutorLossReason)
     extends CoarseGrainedClusterMessage
 
-  case class RemoveWorker(workerId: String, host: String, message: String)
-    extends CoarseGrainedClusterMessage
-
   case class SetupDriver(driver: RpcEndpointRef) extends CoarseGrainedClusterMessage
 
   // Exchanged between the driver and the AM in Yarn client mode
@@ -111,9 +96,6 @@ private[spark] object CoarseGrainedClusterMessages {
   // In Yarn mode, these are exchanged between the driver and the AM
 
   case class RegisterClusterManager(am: RpcEndpointRef) extends CoarseGrainedClusterMessage
-
-  // Used by YARN's client mode AM to retrieve the current set of delegation tokens.
-  object RetrieveDelegationTokens extends CoarseGrainedClusterMessage
 
   // Request executors by specifying the new total number of executors desired
   // This includes executors already pending or running

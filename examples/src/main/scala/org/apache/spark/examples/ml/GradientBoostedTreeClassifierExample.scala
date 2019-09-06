@@ -59,13 +59,12 @@ object GradientBoostedTreeClassifierExample {
       .setLabelCol("indexedLabel")
       .setFeaturesCol("indexedFeatures")
       .setMaxIter(10)
-      .setFeatureSubsetStrategy("auto")
 
     // Convert indexed labels back to original labels.
     val labelConverter = new IndexToString()
       .setInputCol("prediction")
       .setOutputCol("predictedLabel")
-      .setLabels(labelIndexer.labelsArray(0))
+      .setLabels(labelIndexer.labels)
 
     // Chain indexers and GBT in a Pipeline.
     val pipeline = new Pipeline()
@@ -86,10 +85,10 @@ object GradientBoostedTreeClassifierExample {
       .setPredictionCol("prediction")
       .setMetricName("accuracy")
     val accuracy = evaluator.evaluate(predictions)
-    println(s"Test Error = ${1.0 - accuracy}")
+    println("Test Error = " + (1.0 - accuracy))
 
     val gbtModel = model.stages(2).asInstanceOf[GBTClassificationModel]
-    println(s"Learned classification GBT model:\n ${gbtModel.toDebugString}")
+    println("Learned classification GBT model:\n" + gbtModel.toDebugString)
     // $example off$
 
     spark.stop()

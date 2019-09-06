@@ -16,18 +16,17 @@
  */
 
 /**
- * Library for launching Spark applications programmatically.
+ * Library for launching Spark applications.
  *
  * <p>
- * There are two ways to start applications with this library: as a child process, using
- * {@link org.apache.spark.launcher.SparkLauncher}, or in-process, using
- * {@link org.apache.spark.launcher.InProcessLauncher}.
+ * This library allows applications to launch Spark programmatically. There's only one entry
+ * point to the library - the {@link org.apache.spark.launcher.SparkLauncher} class.
  * </p>
  *
  * <p>
- * The {@link org.apache.spark.launcher.AbstractLauncher#startApplication(
- * org.apache.spark.launcher.SparkAppHandle.Listener...)}  method can be used to start Spark and
- * provide a handle to monitor and control the running application:
+ * The {@link org.apache.spark.launcher.SparkLauncher#startApplication(
+ * org.apache.spark.launcher.SparkAppHandle.Listener...)} can be used to start Spark and provide
+ * a handle to monitor and control the running application:
  * </p>
  *
  * <pre>
@@ -50,20 +49,7 @@
  * </pre>
  *
  * <p>
- * Launching applications as a child process requires a full Spark installation. The installation
- * directory can be provided to the launcher explicitly in the launcher's configuration, or by
- * setting the <i>SPARK_HOME</i> environment variable.
- * </p>
- *
- * <p>
- * Launching applications in-process is only recommended in cluster mode, since Spark cannot run
- * multiple client-mode applications concurrently in the same process. The in-process launcher
- * requires the necessary Spark dependencies (such as spark-core and cluster manager-specific
- * modules) to be present in the caller thread's class loader.
- * </p>
- *
- * <p>
- * It's also possible to launch a raw child process, without the extra monitoring, using the
+ * It's also possible to launch a raw child process, using the
  * {@link org.apache.spark.launcher.SparkLauncher#launch()} method:
  * </p>
  *

@@ -24,7 +24,7 @@ import org.apache.spark.sql.catalyst.dsl.plans._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.plans.logical.LocalRelation
-import org.apache.spark.sql.types._
+import org.apache.spark.sql.types.{LongType, StringType, TypeCollection}
 
 class ExpressionTypeCheckingSuite extends SparkFunSuite {
 
@@ -56,6 +56,8 @@ class ExpressionTypeCheckingSuite extends SparkFunSuite {
   }
 
   test("check types for unary arithmetic") {
+    assertError(UnaryMinus('stringField), "(numeric or calendarinterval) type")
+    assertError(Abs('stringField), "requires numeric type")
     assertError(BitwiseNot('stringField), "requires integral type")
   }
 
@@ -77,9 +79,9 @@ class ExpressionTypeCheckingSuite extends SparkFunSuite {
     assertErrorForDifferingTypes(BitwiseOr('intField, 'booleanField))
     assertErrorForDifferingTypes(BitwiseXor('intField, 'booleanField))
 
-    assertError(Add('booleanField, 'booleanField), "requires (numeric or interval) type")
+    assertError(Add('booleanField, 'booleanField), "requires (numeric or calendarinterval) type")
     assertError(Subtract('booleanField, 'booleanField),
-      "requires (numeric or interval) type")
+      "requires (numeric or calendarinterval) type")
     assertError(Multiply('booleanField, 'booleanField), "requires numeric type")
     assertError(Divide('booleanField, 'booleanField), "requires (double or decimal) type")
     assertError(Remainder('booleanField, 'booleanField), "requires numeric type")
@@ -109,17 +111,16 @@ class ExpressionTypeCheckingSuite extends SparkFunSuite {
     assertErrorForDifferingTypes(GreaterThan('intField, 'booleanField))
     assertErrorForDifferingTypes(GreaterThanOrEqual('intField, 'booleanField))
 
-    assertError(EqualTo('mapField, 'mapField), "EqualTo does not support ordering on type map")
-    assertError(EqualNullSafe('mapField, 'mapField),
-      "EqualNullSafe does not support ordering on type map")
+    assertError(EqualTo('mapField, 'mapField), "Cannot use map type in EqualTo")
+    assertError(EqualNullSafe('mapField, 'mapField), "Cannot use map type in EqualNullSafe")
     assertError(LessThan('mapField, 'mapField),
-      "LessThan does not support ordering on type map")
+      s"requires ${TypeCollection.Ordered.simpleString} type")
     assertError(LessThanOrEqual('mapField, 'mapField),
-      "LessThanOrEqual does not support ordering on type map")
+      s"requires ${TypeCollection.Ordered.simpleString} type")
     assertError(GreaterThan('mapField, 'mapField),
-      "GreaterThan does not support ordering on type map")
+      s"requires ${TypeCollection.Ordered.simpleString} type")
     assertError(GreaterThanOrEqual('mapField, 'mapField),
-      "GreaterThanOrEqual does not support ordering on type map")
+      s"requires ${TypeCollection.Ordered.simpleString} type")
 
     assertError(If('intField, 'stringField, 'stringField),
       "type of predicate expression in If should be boolean")
@@ -144,9 +145,6 @@ class ExpressionTypeCheckingSuite extends SparkFunSuite {
     assertSuccess(Sum('stringField))
     assertSuccess(Average('stringField))
     assertSuccess(Min('arrayField))
-    assertSuccess(new EveryAgg('booleanField))
-    assertSuccess(new AnyAgg('booleanField))
-    assertSuccess(new SomeAgg('booleanField))
 
     assertError(Min('mapField), "min does not support ordering on type")
     assertError(Max('mapField), "max does not support ordering on type")
@@ -159,9 +157,8 @@ class ExpressionTypeCheckingSuite extends SparkFunSuite {
       "input to function array should all be the same type")
     assertError(Coalesce(Seq('intField, 'booleanField)),
       "input to function coalesce should all be the same type")
-    assertError(Coalesce(Nil), "function coalesce requires at least one argument")
+    assertError(Coalesce(Nil), "input to function coalesce cannot be empty")
     assertError(new Murmur3Hash(Nil), "function hash requires at least one argument")
-    assertError(new XxHash64(Nil), "function xxhash64 requires at least one argument")
     assertError(Explode('intField),
       "input to function explode should be array or map type")
     assertError(PosExplode('intField),
@@ -173,10 +170,10 @@ class ExpressionTypeCheckingSuite extends SparkFunSuite {
       CreateNamedStruct(Seq("a", "b", 2.0)), "even number of arguments")
     assertError(
       CreateNamedStruct(Seq(1, "a", "b", 2.0)),
-      "Only foldable string expressions are allowed to appear at odd position")
+      "Only foldable StringType expressions are allowed to appear at odd position")
     assertError(
       CreateNamedStruct(Seq('a.string.at(0), "a", "b", 2.0)),
-      "Only foldable string expressions are allowed to appear at odd position")
+      "Only foldable StringType expressions are allowed to appear at odd position")
     assertError(
       CreateNamedStruct(Seq(Literal.create(null, StringType), "a")),
       "Field name should not be null")
@@ -212,7 +209,7 @@ class ExpressionTypeCheckingSuite extends SparkFunSuite {
 
   test("check types for Greatest/Least") {
     for (operator <- Seq[(Seq[Expression] => Expression)](Greatest, Least)) {
-      assertError(operator(Seq('booleanField)), "requires at least two arguments")
+      assertError(operator(Seq('booleanField)), "requires at least 2 arguments")
       assertError(operator(Seq('intField, 'stringField)), "should all have the same type")
       assertError(operator(Seq('mapField, 'mapField)), "does not support ordering")
     }

@@ -32,17 +32,19 @@ package object state {
     /** Map each partition of an RDD along with data in a [[StateStore]]. */
     def mapPartitionsWithStateStore[U: ClassTag](
         sqlContext: SQLContext,
-        stateInfo: StatefulOperatorStateInfo,
+        checkpointLocation: String,
+        operatorId: Long,
+        storeVersion: Long,
         keySchema: StructType,
-        valueSchema: StructType,
-        indexOrdinal: Option[Int])(
+        valueSchema: StructType)(
         storeUpdateFunction: (StateStore, Iterator[T]) => Iterator[U]): StateStoreRDD[T, U] = {
 
       mapPartitionsWithStateStore(
-        stateInfo,
+        checkpointLocation,
+        operatorId,
+        storeVersion,
         keySchema,
         valueSchema,
-        indexOrdinal,
         sqlContext.sessionState,
         Some(sqlContext.streams.stateStoreCoordinator))(
         storeUpdateFunction)
@@ -50,10 +52,11 @@ package object state {
 
     /** Map each partition of an RDD along with data in a [[StateStore]]. */
     private[streaming] def mapPartitionsWithStateStore[U: ClassTag](
-        stateInfo: StatefulOperatorStateInfo,
+        checkpointLocation: String,
+        operatorId: Long,
+        storeVersion: Long,
         keySchema: StructType,
         valueSchema: StructType,
-        indexOrdinal: Option[Int],
         sessionState: SessionState,
         storeCoordinator: Option[StateStoreCoordinatorRef])(
         storeUpdateFunction: (StateStore, Iterator[T]) => Iterator[U]): StateStoreRDD[T, U] = {
@@ -61,22 +64,19 @@ package object state {
       val cleanedF = dataRDD.sparkContext.clean(storeUpdateFunction)
       val wrappedF = (store: StateStore, iter: Iterator[T]) => {
         // Abort the state store in case of error
-        TaskContext.get().addTaskCompletionListener[Unit](_ => {
+        TaskContext.get().addTaskCompletionListener(_ => {
           if (!store.hasCommitted) store.abort()
         })
         cleanedF(store, iter)
       }
-
       new StateStoreRDD(
         dataRDD,
         wrappedF,
-        stateInfo.checkpointLocation,
-        stateInfo.queryRunId,
-        stateInfo.operatorId,
-        stateInfo.storeVersion,
+        checkpointLocation,
+        operatorId,
+        storeVersion,
         keySchema,
         valueSchema,
-        indexOrdinal,
         sessionState,
         storeCoordinator)
     }

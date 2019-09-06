@@ -32,24 +32,13 @@ public class ByteArrayMethods {
   }
 
   public static int roundNumberOfBytesToNearestWord(int numBytes) {
-    return (int)roundNumberOfBytesToNearestWord((long)numBytes);
-  }
-
-  public static long roundNumberOfBytesToNearestWord(long numBytes) {
-    long remainder = numBytes & 0x07;  // This is equivalent to `numBytes % 8`
+    int remainder = numBytes & 0x07;  // This is equivalent to `numBytes % 8`
     if (remainder == 0) {
       return numBytes;
     } else {
       return numBytes + (8 - remainder);
     }
   }
-
-  // Some JVMs can't allocate arrays of length Integer.MAX_VALUE; actual max is somewhat smaller.
-  // Be conservative and lower the cap a little.
-  // Refer to "http://hg.openjdk.java.net/jdk8/jdk8/jdk/file/tip/src/share/classes/java/util/ArrayList.java#l229"
-  // This value is word rounded. Use this value if the allocated byte arrays are used to store other
-  // types rather than bytes.
-  public static int MAX_ROUNDED_ARRAY_LENGTH = Integer.MAX_VALUE - 15;
 
   private static final boolean unaligned = Platform.unaligned();
   /**
@@ -70,7 +59,7 @@ public class ByteArrayMethods {
         i += 1;
       }
     }
-    // for architectures that support unaligned accesses, chew it up 8 bytes at a time
+    // for architectures that suport unaligned accesses, chew it up 8 bytes at a time
     if (unaligned || (((leftOffset + i) % 8 == 0) && ((rightOffset + i) % 8 == 0))) {
       while (i <= length - 8) {
         if (Platform.getLong(leftBase, leftOffset + i) !=

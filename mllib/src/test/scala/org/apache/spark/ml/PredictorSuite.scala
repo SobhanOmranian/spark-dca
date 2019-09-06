@@ -73,7 +73,7 @@ object PredictorSuite {
     }
 
     override def copy(extra: ParamMap): MockPredictor =
-      throw new UnsupportedOperationException()
+      throw new NotImplementedError()
   }
 
   class MockPredictionModel(override val uid: String)
@@ -82,9 +82,9 @@ object PredictorSuite {
     def this() = this(Identifiable.randomUID("mockpredictormodel"))
 
     override def predict(features: Vector): Double =
-      throw new UnsupportedOperationException()
+      throw new NotImplementedError()
 
     override def copy(extra: ParamMap): MockPredictionModel =
-      throw new UnsupportedOperationException()
+      throw new NotImplementedError()
   }
 }

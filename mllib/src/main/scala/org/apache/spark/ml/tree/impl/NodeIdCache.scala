@@ -166,10 +166,6 @@ private[spark] class NodeIdCache(
         }
       }
     }
-    if (nodeIdsForInstances != null) {
-      // Unpersist current one if one exists.
-      nodeIdsForInstances.unpersist()
-    }
     if (prevNodeIdsForInstances != null) {
       // Unpersist the previous one if one exists.
       prevNodeIdsForInstances.unpersist()

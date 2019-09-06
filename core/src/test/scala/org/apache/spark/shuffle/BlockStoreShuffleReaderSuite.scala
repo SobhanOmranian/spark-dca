@@ -23,7 +23,6 @@ import java.nio.ByteBuffer
 import org.mockito.Mockito.{mock, when}
 
 import org.apache.spark._
-import org.apache.spark.internal.config
 import org.apache.spark.network.buffer.{ManagedBuffer, NioManagedBuffer}
 import org.apache.spark.serializer.{JavaSerializer, SerializerManager}
 import org.apache.spark.storage.{BlockManager, BlockManagerId, ShuffleBlockId}
@@ -109,7 +108,7 @@ class BlockStoreShuffleReaderSuite extends SparkFunSuite with LocalSparkContext 
         val shuffleBlockId = ShuffleBlockId(shuffleId, mapId, reduceId)
         (shuffleBlockId, byteOutputStream.size().toLong)
       }
-      Seq((localBlockManagerId, shuffleBlockIdsAndSizes)).toIterator
+      Seq((localBlockManagerId, shuffleBlockIdsAndSizes))
     }
 
     // Create a mocked shuffle handle to pass into HashShuffleReader.
@@ -124,17 +123,14 @@ class BlockStoreShuffleReaderSuite extends SparkFunSuite with LocalSparkContext 
     val serializerManager = new SerializerManager(
       serializer,
       new SparkConf()
-        .set(config.SHUFFLE_COMPRESS, false)
-        .set(config.SHUFFLE_SPILL_COMPRESS, false))
+        .set("spark.shuffle.compress", "false")
+        .set("spark.shuffle.spill.compress", "false"))
 
-    val taskContext = TaskContext.empty()
-    val metrics = taskContext.taskMetrics.createTempShuffleReadMetrics()
     val shuffleReader = new BlockStoreShuffleReader(
       shuffleHandle,
       reduceId,
       reduceId + 1,
-      taskContext,
-      metrics,
+      TaskContext.empty(),
       serializerManager,
       blockManager,
       mapOutputTracker)

@@ -94,6 +94,7 @@ if sys.version < '3':
 else:
     import socketserver as SocketServer
 import threading
+from pyspark.cloudpickle import CloudPickler
 from pyspark.serializers import read_int, PickleSerializer
 
 
@@ -123,13 +124,13 @@ class Accumulator(object):
 
     """
     A shared variable that can be accumulated, i.e., has a commutative and associative "add"
-    operation. Worker tasks on a Spark cluster can add values to an Accumulator with the `+=`
-    operator, but only the driver program is allowed to access its value, using `value`.
+    operation. Worker tasks on a Spark cluster can add values to an Accumulator with the C{+=}
+    operator, but only the driver program is allowed to access its value, using C{value}.
     Updates from the workers get propagated automatically to the driver program.
 
-    While :class:`SparkContext` supports accumulators for primitive data types like :class:`int` and
-    :class:`float`, users can also define accumulators for custom types by providing a custom
-    :class:`AccumulatorParam` object. Refer to the doctest of this module for an example.
+    While C{SparkContext} supports accumulators for primitive data types like C{int} and
+    C{float}, users can also define accumulators for custom types by providing a custom
+    L{AccumulatorParam} object. Refer to the doctest of this module for an example.
     """
 
     def __init__(self, aid, value, accum_param):
@@ -185,14 +186,14 @@ class AccumulatorParam(object):
     def zero(self, value):
         """
         Provide a "zero value" for the type, compatible in dimensions with the
-        provided `value` (e.g., a zero vector)
+        provided C{value} (e.g., a zero vector)
         """
         raise NotImplementedError
 
     def addInPlace(self, value1, value2):
         """
         Add two values of the accumulator's data type, returning a new value;
-        for efficiency, can also update `value1` in place and return it.
+        for efficiency, can also update C{value1} in place and return it.
         """
         raise NotImplementedError
 
@@ -298,4 +299,4 @@ if __name__ == "__main__":
     import doctest
     (failure_count, test_count) = doctest.testmod()
     if failure_count:
-        sys.exit(-1)
+        exit(-1)

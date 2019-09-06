@@ -20,35 +20,26 @@ package org.apache.spark.sql.kafka010
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
-import scala.collection.JavaConverters._
-import scala.util.Random
-
-import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.common.TopicPartition
+import org.scalatest.BeforeAndAfter
 
-import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.execution.datasources.LogicalRelation
-import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Relation
-import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.sources.BaseRelation
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 import org.apache.spark.util.Utils
 
-abstract class KafkaRelationSuiteBase extends QueryTest with SharedSparkSession with KafkaTest {
+class KafkaRelationSuite extends QueryTest with BeforeAndAfter with SharedSQLContext {
 
   import testImplicits._
 
   private val topicId = new AtomicInteger(0)
 
-  protected var testUtils: KafkaTestUtils = _
+  private var testUtils: KafkaTestUtils = _
 
-  override protected def sparkConf: SparkConf =
-    super
-      .sparkConf
-      .set(SQLConf.USE_V1_SOURCE_LIST, "kafka")
+  private def newTopic(): String = s"topic-${topicId.getAndIncrement()}"
 
-  protected def newTopic(): String = s"topic-${topicId.getAndIncrement()}"
+  private def assignString(topic: String, partitions: Iterable[Int]): String = {
+    JsonUtils.partitions(partitions.map(p => new TopicPartition(topic, p)))
+  }
 
   override def beforeAll(): Unit = {
     super.beforeAll()
@@ -57,17 +48,14 @@ abstract class KafkaRelationSuiteBase extends QueryTest with SharedSparkSession 
   }
 
   override def afterAll(): Unit = {
-    try {
-      if (testUtils != null) {
-        testUtils.teardown()
-        testUtils = null
-      }
-    } finally {
+    if (testUtils != null) {
+      testUtils.teardown()
+      testUtils = null
       super.afterAll()
     }
   }
 
-  protected def createDF(
+  private def createDF(
       topic: String,
       withOptions: Map[String, String] = Map.empty[String, String],
       brokerAddress: Option[String] = None) = {
@@ -82,6 +70,7 @@ abstract class KafkaRelationSuiteBase extends QueryTest with SharedSparkSession 
     }
     df.load().selectExpr("CAST(value AS STRING)")
   }
+
 
   test("explicit earliest to latest offsets") {
     val topic = newTopic()
@@ -204,7 +193,7 @@ abstract class KafkaRelationSuiteBase extends QueryTest with SharedSparkSession 
           .read
           .format("kafka")
         options.foreach { case (k, v) => reader.option(k, v) }
-        reader.load().collect()
+        reader.load()
       }
       expectedMsgs.foreach { m =>
         assert(ex.getMessage.toLowerCase(Locale.ROOT).contains(m.toLowerCase(Locale.ROOT)))
@@ -245,168 +234,5 @@ abstract class KafkaRelationSuiteBase extends QueryTest with SharedSparkSession 
     testBadOptions("assign" -> "")("no topicpartitions to assign")
     testBadOptions("subscribe" -> "")("no topics to subscribe")
     testBadOptions("subscribePattern" -> "")("pattern to subscribe is empty")
-  }
-
-  test("allow group.id prefix") {
-    testGroupId("groupIdPrefix", (expected, actual) => {
-      assert(actual.exists(_.startsWith(expected)) && !actual.exists(_ === expected),
-        "Valid consumer groups don't contain the expected group id - " +
-        s"Valid consumer groups: $actual / expected group id: $expected")
-    })
-  }
-
-  test("allow group.id override") {
-    testGroupId("kafka.group.id", (expected, actual) => {
-      assert(actual.exists(_ === expected), "Valid consumer groups don't " +
-        s"contain the expected group id - Valid consumer groups: $actual / " +
-        s"expected group id: $expected")
-    })
-  }
-
-  private def testGroupId(groupIdKey: String, validateGroupId: (String, Iterable[String]) => Unit) {
-    // Tests code path KafkaSourceProvider.createRelation(.)
-    val topic = newTopic()
-    testUtils.createTopic(topic, partitions = 3)
-    testUtils.sendMessages(topic, (1 to 10).map(_.toString).toArray, Some(0))
-    testUtils.sendMessages(topic, (11 to 20).map(_.toString).toArray, Some(1))
-    testUtils.sendMessages(topic, (21 to 30).map(_.toString).toArray, Some(2))
-
-    val customGroupId = "id-" + Random.nextInt()
-    val df = createDF(topic, withOptions = Map(groupIdKey -> customGroupId))
-    checkAnswer(df, (1 to 30).map(_.toString).toDF())
-
-    val consumerGroups = testUtils.listConsumerGroups()
-    val validGroups = consumerGroups.valid().get()
-    val validGroupsId = validGroups.asScala.map(_.groupId())
-    validateGroupId(customGroupId, validGroupsId)
-  }
-
-  test("read Kafka transactional messages: read_committed") {
-    val topic = newTopic()
-    testUtils.createTopic(topic)
-    testUtils.withTranscationalProducer { producer =>
-      val df = spark
-        .read
-        .format("kafka")
-        .option("kafka.bootstrap.servers", testUtils.brokerAddress)
-        .option("kafka.isolation.level", "read_committed")
-        .option("subscribe", topic)
-        .load()
-        .selectExpr("CAST(value AS STRING)")
-
-      producer.beginTransaction()
-      (1 to 5).foreach { i =>
-        producer.send(new ProducerRecord[String, String](topic, i.toString)).get()
-      }
-
-      // Should not read any messages before they are committed
-      assert(df.isEmpty)
-
-      producer.commitTransaction()
-
-      // Should read all committed messages
-      testUtils.waitUntilOffsetAppears(new TopicPartition(topic, 0), 6)
-      checkAnswer(df, (1 to 5).map(_.toString).toDF)
-
-      producer.beginTransaction()
-      (6 to 10).foreach { i =>
-        producer.send(new ProducerRecord[String, String](topic, i.toString)).get()
-      }
-      producer.abortTransaction()
-
-      // Should not read aborted messages
-      testUtils.waitUntilOffsetAppears(new TopicPartition(topic, 0), 12)
-      checkAnswer(df, (1 to 5).map(_.toString).toDF)
-
-      producer.beginTransaction()
-      (11 to 15).foreach { i =>
-        producer.send(new ProducerRecord[String, String](topic, i.toString)).get()
-      }
-      producer.commitTransaction()
-
-      // Should skip aborted messages and read new committed ones.
-      testUtils.waitUntilOffsetAppears(new TopicPartition(topic, 0), 18)
-      checkAnswer(df, ((1 to 5) ++ (11 to 15)).map(_.toString).toDF)
-    }
-  }
-
-  test("read Kafka transactional messages: read_uncommitted") {
-    val topic = newTopic()
-    testUtils.createTopic(topic)
-    testUtils.withTranscationalProducer { producer =>
-      val df = spark
-        .read
-        .format("kafka")
-        .option("kafka.bootstrap.servers", testUtils.brokerAddress)
-        .option("kafka.isolation.level", "read_uncommitted")
-        .option("subscribe", topic)
-        .load()
-        .selectExpr("CAST(value AS STRING)")
-
-      producer.beginTransaction()
-      (1 to 5).foreach { i =>
-        producer.send(new ProducerRecord[String, String](topic, i.toString)).get()
-      }
-
-      // "read_uncommitted" should see all messages including uncommitted ones
-      testUtils.waitUntilOffsetAppears(new TopicPartition(topic, 0), 5)
-      checkAnswer(df, (1 to 5).map(_.toString).toDF)
-
-      producer.commitTransaction()
-
-      // Should read all committed messages
-      testUtils.waitUntilOffsetAppears(new TopicPartition(topic, 0), 6)
-      checkAnswer(df, (1 to 5).map(_.toString).toDF)
-
-      producer.beginTransaction()
-      (6 to 10).foreach { i =>
-        producer.send(new ProducerRecord[String, String](topic, i.toString)).get()
-      }
-      producer.abortTransaction()
-
-      // "read_uncommitted" should see all messages including uncommitted or aborted ones
-      testUtils.waitUntilOffsetAppears(new TopicPartition(topic, 0), 12)
-      checkAnswer(df, (1 to 10).map(_.toString).toDF)
-
-      producer.beginTransaction()
-      (11 to 15).foreach { i =>
-        producer.send(new ProducerRecord[String, String](topic, i.toString)).get()
-      }
-      producer.commitTransaction()
-
-      // Should read all messages
-      testUtils.waitUntilOffsetAppears(new TopicPartition(topic, 0), 18)
-      checkAnswer(df, (1 to 15).map(_.toString).toDF)
-    }
-  }
-}
-
-class KafkaRelationSuiteV1 extends KafkaRelationSuiteBase {
-  override protected def sparkConf: SparkConf =
-    super
-      .sparkConf
-      .set(SQLConf.USE_V1_SOURCE_LIST, "kafka")
-
-  test("V1 Source is used when set through SQLConf") {
-    val topic = newTopic()
-    val df = createDF(topic)
-    assert(df.logicalPlan.collect {
-      case LogicalRelation(_, _, _, _) => true
-    }.nonEmpty)
-  }
-}
-
-class KafkaRelationSuiteV2 extends KafkaRelationSuiteBase {
-  override protected def sparkConf: SparkConf =
-    super
-      .sparkConf
-      .set(SQLConf.USE_V1_SOURCE_LIST, "")
-
-  test("V2 Source is used when set through SQLConf") {
-    val topic = newTopic()
-    val df = createDF(topic)
-    assert(df.logicalPlan.collect {
-      case DataSourceV2Relation(_, _, _) => true
-    }.nonEmpty)
   }
 }

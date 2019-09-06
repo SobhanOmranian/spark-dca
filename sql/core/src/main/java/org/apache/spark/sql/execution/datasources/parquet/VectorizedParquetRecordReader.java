@@ -20,7 +20,6 @@ package org.apache.spark.sql.execution.datasources.parquet;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
-import java.util.TimeZone;
 
 import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
@@ -31,10 +30,7 @@ import org.apache.parquet.schema.Type;
 import org.apache.spark.memory.MemoryMode;
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.execution.vectorized.ColumnVectorUtils;
-import org.apache.spark.sql.execution.vectorized.WritableColumnVector;
-import org.apache.spark.sql.execution.vectorized.OffHeapColumnVector;
-import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector;
-import org.apache.spark.sql.vectorized.ColumnarBatch;
+import org.apache.spark.sql.execution.vectorized.ColumnarBatch;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 
@@ -50,10 +46,6 @@ import org.apache.spark.sql.types.StructType;
  * TODO: make this always return ColumnarBatches.
  */
 public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBase<Object> {
-
-  // The capacity of vectorized batch.
-  private int capacity;
-
   /**
    * Batch of rows that we assemble and the current index we've returned. Every time this
    * batch is used up (batchIdx == numBatched), we populated the batch.
@@ -83,12 +75,6 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
   private boolean[] missingColumns;
 
   /**
-   * The timezone that timestamp INT96 values should be converted to. Null if no conversion. Here to
-   * workaround incompatibilities between different engines when writing timestamp values.
-   */
-  private TimeZone convertTz = null;
-
-  /**
    * columnBatch object that is used for batch decoding. This is created on first use and triggers
    * batched decoding. It is not valid to interleave calls to the batched interface with the row
    * by row RecordReader APIs.
@@ -104,23 +90,15 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
    */
   private ColumnarBatch columnarBatch;
 
-  private WritableColumnVector[] columnVectors;
-
   /**
    * If true, this class returns batches instead of rows.
    */
   private boolean returnColumnarBatch;
 
   /**
-   * The memory mode of the columnarBatch
+   * The default config on whether columnarBatch should be offheap.
    */
-  private final MemoryMode MEMORY_MODE;
-
-  public VectorizedParquetRecordReader(TimeZone convertTz, boolean useOffHeap, int capacity) {
-    this.convertTz = convertTz;
-    MEMORY_MODE = useOffHeap ? MemoryMode.OFF_HEAP : MemoryMode.ON_HEAP;
-    this.capacity = capacity;
-  }
+  private static final MemoryMode DEFAULT_MEMORY_MODE = MemoryMode.ON_HEAP;
 
   /**
    * Implementation of RecordReader API.
@@ -153,7 +131,7 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
   }
 
   @Override
-  public boolean nextKeyValue() throws IOException {
+  public boolean nextKeyValue() throws IOException, InterruptedException {
     resultBatch();
 
     if (returnColumnarBatch) return nextBatch();
@@ -166,15 +144,21 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
   }
 
   @Override
-  public Object getCurrentValue() {
+  public Object getCurrentValue() throws IOException, InterruptedException {
     if (returnColumnarBatch) return columnarBatch;
     return columnarBatch.getRow(batchIdx - 1);
   }
 
   @Override
-  public float getProgress() {
+  public float getProgress() throws IOException, InterruptedException {
     return (float) rowsReturned / totalRowCount;
   }
+
+  /**
+   * Returns the ColumnarBatch object that will be used for all rows returned by this reader.
+   * This object is reused. Calling this enables the vectorized reader. This should be called
+   * before any calls to nextKeyValue/nextBatch.
+   */
 
   // Creates a columnar batch that includes the schema from the data files and the additional
   // partition columns appended to the end of the batch.
@@ -182,10 +166,8 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
   // Columns 0,1: data columns
   // Column 2: partitionValues[0]
   // Column 3: partitionValues[1]
-  private void initBatch(
-      MemoryMode memMode,
-      StructType partitionColumns,
-      InternalRow partitionValues) {
+  public void initBatch(MemoryMode memMode, StructType partitionColumns,
+                        InternalRow partitionValues) {
     StructType batchSchema = new StructType();
     for (StructField f: sparkSchema.fields()) {
       batchSchema = batchSchema.add(f);
@@ -196,48 +178,38 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
       }
     }
 
-    if (memMode == MemoryMode.OFF_HEAP) {
-      columnVectors = OffHeapColumnVector.allocateColumns(capacity, batchSchema);
-    } else {
-      columnVectors = OnHeapColumnVector.allocateColumns(capacity, batchSchema);
-    }
-    columnarBatch = new ColumnarBatch(columnVectors);
+    columnarBatch = ColumnarBatch.allocate(batchSchema, memMode);
     if (partitionColumns != null) {
       int partitionIdx = sparkSchema.fields().length;
       for (int i = 0; i < partitionColumns.fields().length; i++) {
-        ColumnVectorUtils.populate(columnVectors[i + partitionIdx], partitionValues, i);
-        columnVectors[i + partitionIdx].setIsConstant();
+        ColumnVectorUtils.populate(columnarBatch.column(i + partitionIdx), partitionValues, i);
+        columnarBatch.column(i + partitionIdx).setIsConstant();
       }
     }
 
     // Initialize missing columns with nulls.
     for (int i = 0; i < missingColumns.length; i++) {
       if (missingColumns[i]) {
-        columnVectors[i].putNulls(0, capacity);
-        columnVectors[i].setIsConstant();
+        columnarBatch.column(i).putNulls(0, columnarBatch.capacity());
+        columnarBatch.column(i).setIsConstant();
       }
     }
   }
 
-  private void initBatch() {
-    initBatch(MEMORY_MODE, null, null);
+  public void initBatch() {
+    initBatch(DEFAULT_MEMORY_MODE, null, null);
   }
 
   public void initBatch(StructType partitionColumns, InternalRow partitionValues) {
-    initBatch(MEMORY_MODE, partitionColumns, partitionValues);
+    initBatch(DEFAULT_MEMORY_MODE, partitionColumns, partitionValues);
   }
 
-  /**
-   * Returns the ColumnarBatch object that will be used for all rows returned by this reader.
-   * This object is reused. Calling this enables the vectorized reader. This should be called
-   * before any calls to nextKeyValue/nextBatch.
-   */
   public ColumnarBatch resultBatch() {
     if (columnarBatch == null) initBatch();
     return columnarBatch;
   }
 
-  /**
+  /*
    * Can be called before any rows are returned to enable returning columnar batches directly.
    */
   public void enableReturningBatches() {
@@ -248,17 +220,14 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
    * Advances to the next batch of rows. Returns false if there are no more.
    */
   public boolean nextBatch() throws IOException {
-    for (WritableColumnVector vector : columnVectors) {
-      vector.reset();
-    }
-    columnarBatch.setNumRows(0);
+    columnarBatch.reset();
     if (rowsReturned >= totalRowCount) return false;
     checkEndOfRowGroup();
 
-    int num = (int) Math.min((long) capacity, totalCountLoadedSoFar - rowsReturned);
+    int num = (int) Math.min((long) columnarBatch.capacity(), totalCountLoadedSoFar - rowsReturned);
     for (int i = 0; i < columnReaders.length; ++i) {
       if (columnReaders[i] == null) continue;
-      columnReaders[i].readBatch(num, columnVectors[i]);
+      columnReaders[i].readBatch(num, columnarBatch.column(i));
     }
     rowsReturned += num;
     columnarBatch.setNumRows(num);
@@ -268,7 +237,9 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
   }
 
   private void initializeInternal() throws IOException, UnsupportedOperationException {
-    // Check that the requested schema is supported.
+    /**
+     * Check that the requested schema is supported.
+     */
     missingColumns = new boolean[requestedSchema.getFieldCount()];
     List<ColumnDescriptor> columns = requestedSchema.getColumns();
     List<String[]> paths = requestedSchema.getPaths();
@@ -304,12 +275,11 @@ public class VectorizedParquetRecordReader extends SpecificParquetRecordReaderBa
           + rowsReturned + " out of " + totalRowCount);
     }
     List<ColumnDescriptor> columns = requestedSchema.getColumns();
-    List<Type> types = requestedSchema.asGroupType().getFields();
     columnReaders = new VectorizedColumnReader[columns.size()];
     for (int i = 0; i < columns.size(); ++i) {
       if (missingColumns[i]) continue;
-      columnReaders[i] = new VectorizedColumnReader(columns.get(i), types.get(i).getOriginalType(),
-        pages.getPageReader(columns.get(i)), convertTz);
+      columnReaders[i] = new VectorizedColumnReader(columns.get(i),
+          pages.getPageReader(columns.get(i)));
     }
     totalCountLoadedSoFar += pages.getRowCount();
   }

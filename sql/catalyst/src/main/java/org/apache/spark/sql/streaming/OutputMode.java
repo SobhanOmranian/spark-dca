@@ -17,16 +17,16 @@
 
 package org.apache.spark.sql.streaming;
 
-import org.apache.spark.annotation.Evolving;
+import org.apache.spark.annotation.InterfaceStability;
 import org.apache.spark.sql.catalyst.streaming.InternalOutputModes;
 
 /**
- * OutputMode describes what data will be written to a streaming sink when there is
+ * OutputMode is used to what data will be written to a streaming sink when there is
  * new data available in a streaming DataFrame/Dataset.
  *
  * @since 2.0.0
  */
-@Evolving
+@InterfaceStability.Evolving
 public class OutputMode {
 
   /**

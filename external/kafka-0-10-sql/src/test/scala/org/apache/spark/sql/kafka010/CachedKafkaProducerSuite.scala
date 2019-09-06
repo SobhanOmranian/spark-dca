@@ -24,15 +24,16 @@ import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.scalatest.PrivateMethodTester
 
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 
-class CachedKafkaProducerSuite extends SharedSparkSession with PrivateMethodTester with KafkaTest {
+class CachedKafkaProducerSuite extends SharedSQLContext with PrivateMethodTester {
 
   type KP = KafkaProducer[Array[Byte], Array[Byte]]
 
   protected override def beforeEach(): Unit = {
     super.beforeEach()
-    CachedKafkaProducer.clear()
+    val clear = PrivateMethod[Unit]('clear)
+    CachedKafkaProducer.invokePrivate(clear())
   }
 
   test("Should return the cached instance on calling getOrCreate with same params.") {

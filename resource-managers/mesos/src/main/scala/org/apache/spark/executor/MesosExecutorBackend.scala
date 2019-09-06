@@ -29,7 +29,6 @@ import org.apache.spark.{SparkConf, SparkEnv, TaskState}
 import org.apache.spark.TaskState
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.EXECUTOR_ID
 import org.apache.spark.scheduler.TaskDescription
 import org.apache.spark.scheduler.cluster.mesos.MesosSchedulerUtils
 import org.apache.spark.util.Utils
@@ -75,9 +74,9 @@ private[spark] class MesosExecutorBackend
     val properties = Utils.deserialize[Array[(String, String)]](executorInfo.getData.toByteArray) ++
       Seq[(String, String)](("spark.app.id", frameworkInfo.getId.getValue))
     val conf = new SparkConf(loadDefaults = true).setAll(properties)
-    conf.set(EXECUTOR_ID, executorId)
+    val port = conf.getInt("spark.executor.port", 0)
     val env = SparkEnv.createExecutorEnv(
-      conf, executorId, slaveInfo.getHostname, cpusPerTask, None, isLocal = false)
+      conf, executorId, slaveInfo.getHostname, port, cpusPerTask, None, isLocal = false)
 
     executor = new Executor(
       executorId,

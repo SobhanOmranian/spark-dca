@@ -19,7 +19,6 @@ package org.apache.spark.sql.internal
 
 import java.util.Locale
 
-import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
 
 case class HiveSerDe(
@@ -75,10 +74,8 @@ object HiveSerDe {
   def sourceToSerDe(source: String): Option[HiveSerDe] = {
     val key = source.toLowerCase(Locale.ROOT) match {
       case s if s.startsWith("org.apache.spark.sql.parquet") => "parquet"
-      case s if s.startsWith("org.apache.spark.sql.execution.datasources.parquet") => "parquet"
       case s if s.startsWith("org.apache.spark.sql.orc") => "orc"
       case s if s.startsWith("org.apache.spark.sql.hive.orc") => "orc"
-      case s if s.startsWith("org.apache.spark.sql.execution.datasources.orc") => "orc"
       case s if s.equals("orcfile") => "orc"
       case s if s.equals("parquetfile") => "parquet"
       case s if s.equals("avrofile") => "avro"
@@ -89,16 +86,7 @@ object HiveSerDe {
   }
 
   def getDefaultStorage(conf: SQLConf): CatalogStorageFormat = {
-    // To respect hive-site.xml, it peeks Hadoop configuration from existing Spark session,
-    // as an easy workaround. See SPARK-27555.
-    val defaultFormatKey = "hive.default.fileformat"
-    val defaultValue = {
-      val defaultFormatValue = "textfile"
-      SparkSession.getActiveSession.map { session =>
-        session.sessionState.newHadoopConf().get(defaultFormatKey, defaultFormatValue)
-      }.getOrElse(defaultFormatValue)
-    }
-    val defaultStorageType = conf.getConfString("hive.default.fileformat", defaultValue)
+    val defaultStorageType = conf.getConfString("hive.default.fileformat", "textfile")
     val defaultHiveSerde = sourceToSerDe(defaultStorageType)
     CatalogStorageFormat.empty.copy(
       inputFormat = defaultHiveSerde.flatMap(_.inputFormat)

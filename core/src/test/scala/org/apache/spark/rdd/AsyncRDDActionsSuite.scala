@@ -20,22 +20,19 @@ package org.apache.spark.rdd
 import java.util.concurrent.Semaphore
 
 import scala.concurrent._
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.Duration
+import scala.concurrent.ExecutionContext.Implicits.global
 
 import org.scalatest.BeforeAndAfterAll
-import org.scalatest.concurrent.{Signaler, ThreadSignaler, TimeLimits}
+import org.scalatest.concurrent.Timeouts
 import org.scalatest.time.SpanSugar._
 
 import org.apache.spark._
 import org.apache.spark.util.ThreadUtils
 
-class AsyncRDDActionsSuite extends SparkFunSuite with BeforeAndAfterAll with TimeLimits {
+class AsyncRDDActionsSuite extends SparkFunSuite with BeforeAndAfterAll with Timeouts {
 
   @transient private var sc: SparkContext = _
-
-  // Necessary to make ScalaTest 3.x interrupt a thread on the JVM like ScalaTest 2.2.x
-  implicit val defaultSignaler: Signaler = ThreadSignaler
 
   override def beforeAll() {
     super.beforeAll()
@@ -133,16 +130,16 @@ class AsyncRDDActionsSuite extends SparkFunSuite with BeforeAndAfterAll with Tim
         info("Should not have reached this code path (onComplete matching Failure)")
         throw new Exception("Task should succeed")
     }
-    f.foreach { a =>
+    f.onSuccess { case a: Any =>
       sem.release()
     }
-    f.failed.foreach { t =>
+    f.onFailure { case t =>
       info("Should not have reached this code path (onFailure)")
       throw new Exception("Task should succeed")
     }
     assert(f.get() === 10)
 
-    failAfter(10.seconds) {
+    failAfter(10 seconds) {
       sem.acquire(2)
     }
   }
@@ -167,18 +164,18 @@ class AsyncRDDActionsSuite extends SparkFunSuite with BeforeAndAfterAll with Tim
       case scala.util.Failure(e) =>
         sem.release()
     }
-    f.foreach { a =>
+    f.onSuccess { case a: Any =>
       info("Should not have reached this code path (onSuccess)")
       throw new Exception("Task should fail")
     }
-    f.failed.foreach { t =>
+    f.onFailure { case t =>
       sem.release()
     }
     intercept[SparkException] {
       f.get()
     }
 
-    failAfter(10.seconds) {
+    failAfter(10 seconds) {
       sem.acquire(2)
     }
   }

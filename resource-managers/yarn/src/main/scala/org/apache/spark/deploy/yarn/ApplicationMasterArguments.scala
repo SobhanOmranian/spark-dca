@@ -26,7 +26,6 @@ class ApplicationMasterArguments(val args: Array[String]) {
   var primaryRFile: String = null
   var userArgs: Seq[String] = Nil
   var propertiesFile: String = null
-  var distCacheConf: String = null
 
   parseArgs(args.toList)
 
@@ -61,10 +60,6 @@ class ApplicationMasterArguments(val args: Array[String]) {
 
         case ("--properties-file") :: value :: tail =>
           propertiesFile = value
-          args = tail
-
-        case ("--dist-cache-conf") :: value :: tail =>
-          distCacheConf = value
           args = tail
 
         case _ =>

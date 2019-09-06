@@ -1,3 +1,4 @@
+from __future__ import print_function
 #
 # Licensed to the Apache Software Foundation (ASF) under one or more
 # contributor license agreements.  See the NOTICE file distributed with
@@ -15,6 +16,10 @@
 # limitations under the License.
 #
 
+import sys
+
+from pyspark.sql import SparkSession
+
 """
 Read data file users.parquet in local Spark distro:
 
@@ -29,12 +34,6 @@ $ ./bin/spark-submit --driver-class-path /path/to/example/jar \\
 {u'favorite_color': u'red', u'name': u'Ben', u'favorite_numbers': []}
 <...more log output...>
 """
-from __future__ import print_function
-
-import sys
-
-from pyspark.sql import SparkSession
-
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("""
@@ -45,7 +44,7 @@ if __name__ == "__main__":
                 /path/to/examples/parquet_inputformat.py <data_file>
         Assumes you have Parquet data stored in <data_file>.
         """, file=sys.stderr)
-        sys.exit(-1)
+        exit(-1)
 
     path = sys.argv[1]
 

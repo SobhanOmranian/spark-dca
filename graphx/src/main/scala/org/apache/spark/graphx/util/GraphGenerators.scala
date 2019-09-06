@@ -18,7 +18,6 @@
 package org.apache.spark.graphx.util
 
 import scala.annotation.tailrec
-import scala.collection.mutable
 import scala.reflect.ClassTag
 import scala.util._
 
@@ -134,7 +133,7 @@ object GraphGenerators extends Logging {
       throw new IllegalArgumentException(
         s"numEdges must be <= $numEdgesUpperBound but was $numEdges")
     }
-    var edges = mutable.Set.empty[Edge[Int]]
+    var edges: Set[Edge[Int]] = Set()
     while (edges.size < numEdges) {
       if (edges.size % 100 == 0) {
         logDebug(edges.size + " edges")

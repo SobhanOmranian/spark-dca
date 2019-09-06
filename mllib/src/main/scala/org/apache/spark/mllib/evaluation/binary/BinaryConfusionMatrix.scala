@@ -21,23 +21,23 @@ package org.apache.spark.mllib.evaluation.binary
  * Trait for a binary confusion matrix.
  */
 private[evaluation] trait BinaryConfusionMatrix {
-  /** weighted number of true positives */
-  def weightedTruePositives: Double
+  /** number of true positives */
+  def numTruePositives: Long
 
-  /** weighted number of false positives */
-  def weightedFalsePositives: Double
+  /** number of false positives */
+  def numFalsePositives: Long
 
-  /** weighted number of false negatives */
-  def weightedFalseNegatives: Double
+  /** number of false negatives */
+  def numFalseNegatives: Long
 
-  /** weighted number of true negatives */
-  def weightedTrueNegatives: Double
+  /** number of true negatives */
+  def numTrueNegatives: Long
 
-  /** weighted number of positives */
-  def weightedPositives: Double = weightedTruePositives + weightedFalseNegatives
+  /** number of positives */
+  def numPositives: Long = numTruePositives + numFalseNegatives
 
-  /** weighted number of negatives */
-  def weightedNegatives: Double = weightedFalsePositives + weightedTrueNegatives
+  /** number of negatives */
+  def numNegatives: Long = numFalsePositives + numTrueNegatives
 }
 
 /**
@@ -51,22 +51,20 @@ private[evaluation] case class BinaryConfusionMatrixImpl(
     totalCount: BinaryLabelCounter) extends BinaryConfusionMatrix {
 
   /** number of true positives */
-  override def weightedTruePositives: Double = count.weightedNumPositives
+  override def numTruePositives: Long = count.numPositives
 
   /** number of false positives */
-  override def weightedFalsePositives: Double = count.weightedNumNegatives
+  override def numFalsePositives: Long = count.numNegatives
 
   /** number of false negatives */
-  override def weightedFalseNegatives: Double =
-    totalCount.weightedNumPositives - count.weightedNumPositives
+  override def numFalseNegatives: Long = totalCount.numPositives - count.numPositives
 
   /** number of true negatives */
-  override def weightedTrueNegatives: Double =
-    totalCount.weightedNumNegatives - count.weightedNumNegatives
+  override def numTrueNegatives: Long = totalCount.numNegatives - count.numNegatives
 
   /** number of positives */
-  override def weightedPositives: Double = totalCount.weightedNumPositives
+  override def numPositives: Long = totalCount.numPositives
 
   /** number of negatives */
-  override def weightedNegatives: Double = totalCount.weightedNumNegatives
+  override def numNegatives: Long = totalCount.numNegatives
 }

@@ -18,7 +18,6 @@
 package org.apache.spark.sql.catalyst.expressions
 
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.BindReferences.bindReferences
 import org.apache.spark.sql.types._
 
 
@@ -28,7 +27,7 @@ import org.apache.spark.sql.types._
 class InterpretedOrdering(ordering: Seq[SortOrder]) extends Ordering[InternalRow] {
 
   def this(ordering: Seq[SortOrder], inputSchema: Seq[Attribute]) =
-    this(bindReferences(ordering, inputSchema))
+    this(ordering.map(BindReferences.bindReference(_, inputSchema)))
 
   def compare(a: InternalRow, b: InternalRow): Int = {
     var i = 0

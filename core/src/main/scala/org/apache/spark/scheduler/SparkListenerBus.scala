@@ -57,16 +57,10 @@ private[spark] trait SparkListenerBus
         listener.onApplicationEnd(applicationEnd)
       case metricsUpdate: SparkListenerExecutorMetricsUpdate =>
         listener.onExecutorMetricsUpdate(metricsUpdate)
-      case stageExecutorMetrics: SparkListenerStageExecutorMetrics =>
-        listener.onStageExecutorMetrics(stageExecutorMetrics)
       case executorAdded: SparkListenerExecutorAdded =>
         listener.onExecutorAdded(executorAdded)
       case executorRemoved: SparkListenerExecutorRemoved =>
         listener.onExecutorRemoved(executorRemoved)
-      case executorBlacklistedForStage: SparkListenerExecutorBlacklistedForStage =>
-        listener.onExecutorBlacklistedForStage(executorBlacklistedForStage)
-      case nodeBlacklistedForStage: SparkListenerNodeBlacklistedForStage =>
-        listener.onNodeBlacklistedForStage(nodeBlacklistedForStage)
       case executorBlacklisted: SparkListenerExecutorBlacklisted =>
         listener.onExecutorBlacklisted(executorBlacklisted)
       case executorUnblacklisted: SparkListenerExecutorUnblacklisted =>
@@ -77,8 +71,7 @@ private[spark] trait SparkListenerBus
         listener.onNodeUnblacklisted(nodeUnblacklisted)
       case blockUpdated: SparkListenerBlockUpdated =>
         listener.onBlockUpdated(blockUpdated)
-      case speculativeTaskSubmitted: SparkListenerSpeculativeTaskSubmitted =>
-        listener.onSpeculativeTaskSubmitted(speculativeTaskSubmitted)
+      case logStart: SparkListenerLogStart => // ignore event log metadata
       case _ => listener.onOtherEvent(event)
     }
   }

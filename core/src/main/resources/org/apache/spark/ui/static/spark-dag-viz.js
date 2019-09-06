@@ -172,12 +172,6 @@ function renderDagViz(forJob) {
     svg.selectAll("g." + nodeId).classed("cached", true);
   });
 
-  metadataContainer().selectAll(".barrier-rdd").each(function() {
-    var rddId = d3.select(this).text().trim()
-    var clusterId = VizConstants.clusterPrefix + rddId
-    svg.selectAll("g." + clusterId).classed("barrier", true)
-  });
-
   resizeSvg(svg);
   interpretLineBreak(svg);
 }
@@ -226,7 +220,7 @@ function renderDagVizForJob(svgContainer) {
     } else {
       // Link each graph to the corresponding stage page (TODO: handle stage attempts)
       // Use the link from the stage table so it also works for the history server
-      var attemptId = 0;
+      var attemptId = 0
       var stageLink = d3.select("#stage-" + stageId + "-" + attemptId)
         .select("a.name-link")
         .attr("href");
@@ -242,7 +236,7 @@ function renderDagVizForJob(svgContainer) {
     // existing ones, taking into account the position and width of the last stage's
     // container. We do not need to do this for the first stage of this job.
     if (i > 0) {
-      var existingStages = svgContainer.selectAll("g.cluster.stage");
+      var existingStages = svgContainer.selectAll("g.cluster.stage")
       if (!existingStages.empty()) {
         var lastStage = d3.select(existingStages[0].pop());
         var lastStageWidth = toFloat(lastStage.select("rect").attr("width"));
@@ -375,8 +369,8 @@ function resizeSvg(svg) {
  * here this function is to enable line break.
  */
 function interpretLineBreak(svg) {
-  svg.selectAll("tspan").each(function() {
-    var node = d3.select(this);
+  var allTSpan = svg.selectAll("tspan").each(function() {
+    node = d3.select(this);
     var original = node[0][0].innerHTML;
     if (original.indexOf("\\n") != -1) {
       var arr = original.split("\\n");

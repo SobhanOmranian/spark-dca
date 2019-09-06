@@ -24,8 +24,10 @@ import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration._
+import scala.language.postfixOps
 
 import com.google.common.io.Files
+import org.apache.commons.lang3.SerializationUtils
 import org.apache.hadoop.yarn.conf.YarnConfiguration
 import org.apache.hadoop.yarn.server.MiniYARNCluster
 import org.scalatest.{BeforeAndAfterAll, Matchers}
@@ -34,7 +36,6 @@ import org.scalatest.concurrent.Eventually._
 import org.apache.spark._
 import org.apache.spark.deploy.yarn.config._
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config._
 import org.apache.spark.launcher._
 import org.apache.spark.util.Utils
 
@@ -52,7 +53,7 @@ abstract class BaseYarnClusterSuite
     |log4j.logger.org.apache.hadoop=WARN
     |log4j.logger.org.eclipse.jetty=WARN
     |log4j.logger.org.mortbay=WARN
-    |log4j.logger.org.sparkproject.jetty=WARN
+    |log4j.logger.org.spark_project.jetty=WARN
     """.stripMargin
 
   private var yarnCluster: MiniYARNCluster = _
@@ -61,14 +62,18 @@ abstract class BaseYarnClusterSuite
   protected var hadoopConfDir: File = _
   private var logConfDir: File = _
 
+  var oldSystemProperties: Properties = null
+
   def newYarnConfig(): YarnConfiguration
 
   override def beforeAll() {
     super.beforeAll()
+    oldSystemProperties = SerializationUtils.clone(System.getProperties)
 
     tempDir = Utils.createTempDir()
     logConfDir = new File(tempDir, "log4j")
     logConfDir.mkdir()
+    System.setProperty("SPARK_YARN_MODE", "true")
 
     val logConfFile = new File(logConfDir, "log4j.properties")
     Files.write(LOG4J_CONF, logConfFile, StandardCharsets.UTF_8)
@@ -98,9 +103,9 @@ abstract class BaseYarnClusterSuite
     // This hack loops for a bit waiting for the port to change, and fails the test if it hasn't
     // done so in a timely manner (defined to be 10 seconds).
     val config = yarnCluster.getConfig()
-    val startTimeNs = System.nanoTime()
+    val deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10)
     while (config.get(YarnConfiguration.RM_ADDRESS).split(":")(1) == "0") {
-      if (System.nanoTime() - startTimeNs > TimeUnit.SECONDS.toNanos(10)) {
+      if (System.currentTimeMillis() > deadline) {
         throw new IllegalStateException("Timed out waiting for RM to come up.")
       }
       logDebug("RM address still not set in configuration, waiting...")
@@ -119,6 +124,7 @@ abstract class BaseYarnClusterSuite
     try {
       yarnCluster.stop()
     } finally {
+      System.setProperties(oldSystemProperties)
       super.afterAll()
     }
   }
@@ -131,8 +137,7 @@ abstract class BaseYarnClusterSuite
       extraClassPath: Seq[String] = Nil,
       extraJars: Seq[String] = Nil,
       extraConf: Map[String, String] = Map(),
-      extraEnv: Map[String, String] = Map(),
-      outFile: Option[File] = None): SparkAppHandle.State = {
+      extraEnv: Map[String, String] = Map()): SparkAppHandle.State = {
     val deployMode = if (clientMode) "client" else "cluster"
     val propsFile = createConfFile(extraClassPath = extraClassPath, extraConf = extraConf)
     val env = Map("YARN_CONF_DIR" -> hadoopConfDir.getAbsolutePath()) ++ extraEnv
@@ -147,7 +152,7 @@ abstract class BaseYarnClusterSuite
     launcher.setSparkHome(sys.props("spark.test.home"))
       .setMaster("yarn")
       .setDeployMode(deployMode)
-      .setConf(EXECUTOR_INSTANCES.key, "1")
+      .setConf("spark.executor.instances", "1")
       .setPropertiesFile(propsFile)
       .addAppArgs(appArgs.toArray: _*)
 
@@ -160,14 +165,9 @@ abstract class BaseYarnClusterSuite
     }
     extraJars.foreach(launcher.addJar)
 
-    if (outFile.isDefined) {
-      launcher.redirectOutput(outFile.get)
-      launcher.redirectError()
-    }
-
     val handle = launcher.startApplication()
     try {
-      eventually(timeout(3.minutes), interval(1.second)) {
+      eventually(timeout(2 minutes), interval(1 second)) {
         assert(handle.getState().isFinal())
       }
     } finally {
@@ -183,22 +183,17 @@ abstract class BaseYarnClusterSuite
    * the tests enforce that something is written to a file after everything is ok to indicate
    * that the job succeeded.
    */
+  protected def checkResult(finalState: SparkAppHandle.State, result: File): Unit = {
+    checkResult(finalState, result, "success")
+  }
+
   protected def checkResult(
       finalState: SparkAppHandle.State,
       result: File,
-      expected: String = "success",
-      outFile: Option[File] = None): Unit = {
-    // the context message is passed to assert as Any instead of a function. to lazily load the
-    // output from the file, this passes an anonymous object that loads it in toString when building
-    // an error message
-    val output = new Object() {
-      override def toString: String = outFile
-          .map(Files.toString(_, StandardCharsets.UTF_8))
-          .getOrElse("(stdout/stderr was not captured)")
-    }
-    assert(finalState === SparkAppHandle.State.FINISHED, output)
+      expected: String): Unit = {
+    finalState should be (SparkAppHandle.State.FINISHED)
     val resultString = Files.toString(result, StandardCharsets.UTF_8)
-    assert(resultString === expected, output)
+    resultString should be (expected)
   }
 
   protected def mainClassName(klass: Class[_]): String = {
@@ -225,14 +220,6 @@ abstract class BaseYarnClusterSuite
     // SPARK-4267: make sure java options are propagated correctly.
     props.setProperty("spark.driver.extraJavaOptions", "-Dfoo=\"one two three\"")
     props.setProperty("spark.executor.extraJavaOptions", "-Dfoo=\"one two three\"")
-
-    // SPARK-24446: make sure special characters in the library path do not break containers.
-    if (!Utils.isWindows) {
-      val libPath = """/tmp/does not exist:$PWD/tmp:/tmp/quote":/tmp/ampersand&"""
-      props.setProperty(AM_LIBRARY_PATH.key, libPath)
-      props.setProperty(DRIVER_LIBRARY_PATH.key, libPath)
-      props.setProperty(EXECUTOR_LIBRARY_PATH.key, libPath)
-    }
 
     yarnCluster.getConfig().asScala.foreach { e =>
       props.setProperty("spark.hadoop." + e.getKey(), e.getValue())

@@ -18,14 +18,55 @@
 package org.apache.spark.sql.execution
 
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{Encoder, SparkSession}
-import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.{Encoder, Row, SparkSession}
+import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow}
 import org.apache.spark.sql.catalyst.analysis.MultiInstanceRelation
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartitioning}
-import org.apache.spark.sql.catalyst.util.truncatedString
 import org.apache.spark.sql.execution.metric.SQLMetrics
+import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.types.DataType
+import org.apache.spark.util.Utils
+
+object RDDConversions {
+  def productToRowRdd[A <: Product](data: RDD[A], outputTypes: Seq[DataType]): RDD[InternalRow] = {
+    data.mapPartitions { iterator =>
+      val numColumns = outputTypes.length
+      val mutableRow = new GenericInternalRow(numColumns)
+      val converters = outputTypes.map(CatalystTypeConverters.createToCatalystConverter)
+      iterator.map { r =>
+        var i = 0
+        while (i < numColumns) {
+          mutableRow(i) = converters(i)(r.productElement(i))
+          i += 1
+        }
+
+        mutableRow
+      }
+    }
+  }
+
+  /**
+   * Convert the objects inside Row into the types Catalyst expected.
+   */
+  def rowToRowRdd(data: RDD[Row], outputTypes: Seq[DataType]): RDD[InternalRow] = {
+    data.mapPartitions { iterator =>
+      val numColumns = outputTypes.length
+      val mutableRow = new GenericInternalRow(numColumns)
+      val converters = outputTypes.map(CatalystTypeConverters.createToCatalystConverter)
+      iterator.map { r =>
+        var i = 0
+        while (i < numColumns) {
+          mutableRow(i) = converters(i)(r(i))
+          i += 1
+        }
+
+        mutableRow
+      }
+    }
+  }
+}
 
 object ExternalRDD {
 
@@ -48,7 +89,7 @@ case class ExternalRDD[T](
 
   override protected def stringArgs: Iterator[Any] = Iterator(output)
 
-  override def computeStats(): Statistics = Statistics(
+  @transient override def computeStats(conf: SQLConf): Statistics = Statistics(
     // TODO: Instead of returning a default value here, find a way to return a meaningful size
     // estimate for RDDs. See PR 1238 for more discussions.
     sizeInBytes = BigInt(session.sessionState.conf.defaultSizeInBytes)
@@ -63,14 +104,11 @@ case class ExternalRDDScanExec[T](
   override lazy val metrics = Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"))
 
-  private def rddName: String = Option(rdd.name).map(n => s" $n").getOrElse("")
-
-  override val nodeName: String = s"Scan$rddName"
-
   protected override def doExecute(): RDD[InternalRow] = {
     val numOutputRows = longMetric("numOutputRows")
+    val outputDataType = outputObjAttr.dataType
     rdd.mapPartitionsInternal { iter =>
-      val outputObject = ObjectOperator.wrapObjectToRow(outputObjectType)
+      val outputObject = ObjectOperator.wrapObjectToRow(outputDataType)
       iter.map { value =>
         numOutputRows += 1
         outputObject(value)
@@ -78,8 +116,8 @@ case class ExternalRDDScanExec[T](
     }
   }
 
-  override def simpleString(maxFields: Int): String = {
-    s"$nodeName${output.mkString("[", ",", "]")}"
+  override def simpleString: String = {
+    s"Scan $nodeName${output.mkString("[", ",", "]")}"
   }
 }
 
@@ -88,8 +126,7 @@ case class LogicalRDD(
     output: Seq[Attribute],
     rdd: RDD[InternalRow],
     outputPartitioning: Partitioning = UnknownPartitioning(0),
-    override val outputOrdering: Seq[SortOrder] = Nil,
-    override val isStreaming: Boolean = false)(session: SparkSession)
+    outputOrdering: Seq[SortOrder] = Nil)(session: SparkSession)
   extends LeafNode with MultiInstanceRelation {
 
   override protected final def otherCopyArgs: Seq[AnyRef] = session :: Nil
@@ -114,14 +151,13 @@ case class LogicalRDD(
       output.map(rewrite),
       rdd,
       rewrittenPartitioning,
-      rewrittenOrdering,
-      isStreaming
+      rewrittenOrdering
     )(session).asInstanceOf[this.type]
   }
 
-  override protected def stringArgs: Iterator[Any] = Iterator(output, isStreaming)
+  override protected def stringArgs: Iterator[Any] = Iterator(output)
 
-  override def computeStats(): Statistics = Statistics(
+  @transient override def computeStats(conf: SQLConf): Statistics = Statistics(
     // TODO: Instead of returning a default value here, find a way to return a meaningful size
     // estimate for RDDs. See PR 1238 for more discussions.
     sizeInBytes = BigInt(session.sessionState.conf.defaultSizeInBytes)
@@ -132,13 +168,9 @@ case class LogicalRDD(
 case class RDDScanExec(
     output: Seq[Attribute],
     rdd: RDD[InternalRow],
-    name: String,
+    override val nodeName: String,
     override val outputPartitioning: Partitioning = UnknownPartitioning(0),
-    override val outputOrdering: Seq[SortOrder] = Nil) extends LeafExecNode with InputRDDCodegen {
-
-  private def rddName: String = Option(rdd.name).map(n => s" $n").getOrElse("")
-
-  override val nodeName: String = s"Scan $name$rddName"
+    override val outputOrdering: Seq[SortOrder] = Nil) extends LeafExecNode {
 
   override lazy val metrics = Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"))
@@ -155,12 +187,7 @@ case class RDDScanExec(
     }
   }
 
-  override def simpleString(maxFields: Int): String = {
-    s"$nodeName${truncatedString(output, "[", ",", "]", maxFields)}"
+  override def simpleString: String = {
+    s"Scan $nodeName${Utils.truncatedString(output, "[", ",", "]")}"
   }
-
-  // Input can be InternalRow, has to be turned into UnsafeRows.
-  override protected val createUnsafeProjection: Boolean = true
-
-  override def inputRDD: RDD[InternalRow] = rdd
 }

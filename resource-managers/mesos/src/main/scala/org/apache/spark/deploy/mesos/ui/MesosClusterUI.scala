@@ -40,7 +40,7 @@ private[spark] class MesosClusterUI(
   override def initialize() {
     attachPage(new MesosClusterPage(this))
     attachPage(new DriverPage(this))
-    addStaticHandler(MesosClusterUI.STATIC_RESOURCE_DIR)
+    attachHandler(createStaticHandler(MesosClusterUI.STATIC_RESOURCE_DIR, "/static"))
   }
 }
 

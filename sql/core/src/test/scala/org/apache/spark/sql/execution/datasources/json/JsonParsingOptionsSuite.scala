@@ -19,12 +19,12 @@ package org.apache.spark.sql.execution.datasources.json
 
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.json.JSONOptions
-import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.test.SharedSQLContext
 
 /**
  * Test cases for various [[JSONOptions]].
  */
-class JsonParsingOptionsSuite extends QueryTest with SharedSparkSession {
+class JsonParsingOptionsSuite extends QueryTest with SharedSQLContext {
   import testImplicits._
 
   test("allowComments off") {
@@ -70,21 +70,6 @@ class JsonParsingOptionsSuite extends QueryTest with SharedSparkSession {
 
     assert(df.schema.head.name == "name")
     assert(df.first().getString(0) == "Reynold Xin")
-  }
-
-  test("allowUnquotedControlChars off") {
-    val str = """{"name": "a\u0001b"}"""
-    val df = spark.read.json(Seq(str).toDS())
-
-    assert(df.schema.head.name == "_corrupt_record")
-  }
-
-  test("allowUnquotedControlChars on") {
-    val str = """{"name": "a\u0001b"}"""
-    val df = spark.read.option("allowUnquotedControlChars", "true").json(Seq(str).toDS())
-
-    assert(df.schema.head.name == "name")
-    assert(df.first().getString(0) == "a\u0001b")
   }
 
   test("allowNumericLeadingZeros off") {

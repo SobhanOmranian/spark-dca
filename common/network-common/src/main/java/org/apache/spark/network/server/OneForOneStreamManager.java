@@ -23,11 +23,8 @@ import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import io.netty.channel.Channel;
-import org.apache.commons.lang3.tuple.ImmutablePair;
-import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,19 +47,15 @@ public class OneForOneStreamManager extends StreamManager {
     final Iterator<ManagedBuffer> buffers;
 
     // The channel associated to the stream
-    final Channel associatedChannel;
+    Channel associatedChannel = null;
 
     // Used to keep track of the index of the buffer that the user has retrieved, just to ensure
     // that the caller only requests each chunk one at a time, in order.
     int curChunk = 0;
 
-    // Used to keep track of the number of chunks being transferred and not finished yet.
-    volatile long chunksBeingTransferred = 0L;
-
-    StreamState(String appId, Iterator<ManagedBuffer> buffers, Channel channel) {
+    StreamState(String appId, Iterator<ManagedBuffer> buffers) {
       this.appId = appId;
       this.buffers = Preconditions.checkNotNull(buffers);
-      this.associatedChannel = channel;
     }
   }
 
@@ -71,6 +64,13 @@ public class OneForOneStreamManager extends StreamManager {
     // This does not need to be globally unique, only unique to this class.
     nextStreamId = new AtomicLong((long) new Random().nextInt(Integer.MAX_VALUE) * 1000);
     streams = new ConcurrentHashMap<>();
+  }
+
+  @Override
+  public void registerChannel(Channel channel, long streamId) {
+    if (streams.containsKey(streamId)) {
+      streams.get(streamId).associatedChannel = channel;
+    }
   }
 
   @Override
@@ -96,23 +96,16 @@ public class OneForOneStreamManager extends StreamManager {
 
   @Override
   public ManagedBuffer openStream(String streamChunkId) {
-    Pair<Long, Integer> streamChunkIdPair = parseStreamChunkId(streamChunkId);
-    return getChunk(streamChunkIdPair.getLeft(), streamChunkIdPair.getRight());
+    String[] array = streamChunkId.split("_");
+    assert array.length == 2:
+      "Stream id and chunk index should be specified when open stream for fetching block.";
+    long streamId = Long.valueOf(array[0]);
+    int chunkIndex = Integer.valueOf(array[1]);
+    return getChunk(streamId, chunkIndex);
   }
 
   public static String genStreamChunkId(long streamId, int chunkId) {
     return String.format("%d_%d", streamId, chunkId);
-  }
-
-  // Parse streamChunkId to be stream id and chunk id. This is used when fetch remote chunk as a
-  // stream.
-  public static Pair<Long, Integer> parseStreamChunkId(String streamChunkId) {
-    String[] array = streamChunkId.split("_");
-    assert array.length == 2:
-      "Stream id and chunk index should be specified.";
-    long streamId = Long.valueOf(array[0]);
-    int chunkIndex = Integer.valueOf(array[1]);
-    return ImmutablePair.of(streamId, chunkIndex);
   }
 
   @Override
@@ -125,10 +118,7 @@ public class OneForOneStreamManager extends StreamManager {
 
         // Release all remaining buffers.
         while (state.buffers.hasNext()) {
-          ManagedBuffer buffer = state.buffers.next();
-          if (buffer != null) {
-            buffer.release();
-          }
+          state.buffers.next().release();
         }
       }
     }
@@ -149,42 +139,6 @@ public class OneForOneStreamManager extends StreamManager {
     }
   }
 
-  @Override
-  public void chunkBeingSent(long streamId) {
-    StreamState streamState = streams.get(streamId);
-    if (streamState != null) {
-      streamState.chunksBeingTransferred++;
-    }
-
-  }
-
-  @Override
-  public void streamBeingSent(String streamId) {
-    chunkBeingSent(parseStreamChunkId(streamId).getLeft());
-  }
-
-  @Override
-  public void chunkSent(long streamId) {
-    StreamState streamState = streams.get(streamId);
-    if (streamState != null) {
-      streamState.chunksBeingTransferred--;
-    }
-  }
-
-  @Override
-  public void streamSent(String streamId) {
-    chunkSent(OneForOneStreamManager.parseStreamChunkId(streamId).getLeft());
-  }
-
-  @Override
-  public long chunksBeingTransferred() {
-    long sum = 0L;
-    for (StreamState streamState: streams.values()) {
-      sum += streamState.chunksBeingTransferred;
-    }
-    return sum;
-  }
-
   /**
    * Registers a stream of ManagedBuffers which are served as individual chunks one at a time to
    * callers. Each ManagedBuffer will be release()'d after it is transferred on the wire. If a
@@ -193,19 +147,11 @@ public class OneForOneStreamManager extends StreamManager {
    *
    * If an app ID is provided, only callers who've authenticated with the given app ID will be
    * allowed to fetch from this stream.
-   *
-   * This method also associates the stream with a single client connection, which is guaranteed
-   * to be the only reader of the stream. Once the connection is closed, the stream will never
-   * be used again, enabling cleanup by `connectionTerminated`.
    */
-  public long registerStream(String appId, Iterator<ManagedBuffer> buffers, Channel channel) {
+  public long registerStream(String appId, Iterator<ManagedBuffer> buffers) {
     long myStreamId = nextStreamId.getAndIncrement();
-    streams.put(myStreamId, new StreamState(appId, buffers, channel));
+    streams.put(myStreamId, new StreamState(appId, buffers));
     return myStreamId;
   }
 
-  @VisibleForTesting
-  public int numStreamStates() {
-    return streams.size();
-  }
 }

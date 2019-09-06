@@ -37,7 +37,7 @@ class BlockManagerSlaveEndpoint(
   extends ThreadSafeRpcEndpoint with Logging {
 
   private val asyncThreadPool =
-    ThreadUtils.newDaemonCachedThreadPool("block-manager-slave-async-thread-pool", 100)
+    ThreadUtils.newDaemonCachedThreadPool("block-manager-slave-async-thread-pool")
   private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(asyncThreadPool)
 
   // Operations that involve removing blocks may be slow and should be done asynchronously
@@ -85,13 +85,13 @@ class BlockManagerSlaveEndpoint(
       logDebug(actionMessage)
       body
     }
-    future.foreach { response =>
-      logDebug(s"Done $actionMessage, response is $response")
+    future.onSuccess { case response =>
+      logDebug("Done " + actionMessage + ", response is " + response)
       context.reply(response)
-      logDebug(s"Sent response: $response to ${context.senderAddress}")
+      logDebug("Sent response: " + response + " to " + context.senderAddress)
     }
-    future.failed.foreach { t =>
-      logError(s"Error in $actionMessage", t)
+    future.onFailure { case t: Throwable =>
+      logError("Error in " + actionMessage, t)
       context.sendFailure(t)
     }
   }

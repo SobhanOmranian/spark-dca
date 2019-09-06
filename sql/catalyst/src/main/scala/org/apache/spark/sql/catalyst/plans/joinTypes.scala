@@ -27,17 +27,17 @@ object JoinType {
     case "outer" | "full" | "fullouter" => FullOuter
     case "leftouter" | "left" => LeftOuter
     case "rightouter" | "right" => RightOuter
-    case "leftsemi" | "semi" => LeftSemi
-    case "leftanti" | "anti" => LeftAnti
+    case "leftsemi" => LeftSemi
+    case "leftanti" => LeftAnti
     case "cross" => Cross
     case _ =>
       val supported = Seq(
         "inner",
-        "outer", "full", "fullouter", "full_outer",
-        "leftouter", "left", "left_outer",
-        "rightouter", "right", "right_outer",
-        "leftsemi", "left_semi", "semi",
-        "leftanti", "left_anti", "anti",
+        "outer", "full", "fullouter",
+        "leftouter", "left",
+        "rightouter", "right",
+        "leftsemi",
+        "leftanti",
         "cross")
 
       throw new IllegalArgumentException(s"Unsupported join type '$typ'. " +
@@ -111,13 +111,6 @@ object LeftExistence {
   def unapply(joinType: JoinType): Option[JoinType] = joinType match {
     case LeftSemi | LeftAnti => Some(joinType)
     case j: ExistenceJoin => Some(joinType)
-    case _ => None
-  }
-}
-
-object LeftSemiOrAnti {
-  def unapply(joinType: JoinType): Option[JoinType] = joinType match {
-    case LeftSemi | LeftAnti => Some(joinType)
     case _ => None
   }
 }

@@ -73,8 +73,7 @@ object KinesisUtils {
     // Setting scope to override receiver stream's scope of "receiver stream"
     ssc.withNamedScope("kinesis stream") {
       new KinesisInputDStream[T](ssc, streamName, endpointUrl, validateRegion(regionName),
-        KinesisInitialPositions.fromKinesisInitialPosition(initialPositionInStream),
-        kinesisAppName, checkpointInterval, storageLevel,
+        initialPositionInStream, kinesisAppName, checkpointInterval, storageLevel,
         cleanedHandler, DefaultCredentials, None, None)
     }
   }
@@ -130,8 +129,7 @@ object KinesisUtils {
         awsAccessKeyId = awsAccessKeyId,
         awsSecretKey = awsSecretKey)
       new KinesisInputDStream[T](ssc, streamName, endpointUrl, validateRegion(regionName),
-        KinesisInitialPositions.fromKinesisInitialPosition(initialPositionInStream),
-        kinesisAppName, checkpointInterval, storageLevel,
+        initialPositionInStream, kinesisAppName, checkpointInterval, storageLevel,
         cleanedHandler, kinesisCredsProvider, None, None)
     }
   }
@@ -164,7 +162,7 @@ object KinesisUtils {
    * @param awsSecretKey  AWS SecretKey (if null, will use DefaultAWSCredentialsProviderChain)
    * @param stsAssumeRoleArn ARN of IAM role to assume when using STS sessions to read from
    *                         Kinesis stream.
-   * @param stsSessionName Name to uniquely identify STS sessions if multiple principals assume
+   * @param stsSessionName Name to uniquely identify STS sessions if multiple princples assume
    *                       the same role.
    * @param stsExternalId External ID that can be used to validate against the assumed IAM role's
    *                      trust policy.
@@ -200,8 +198,7 @@ object KinesisUtils {
           awsAccessKeyId = awsAccessKeyId,
           awsSecretKey = awsSecretKey))
       new KinesisInputDStream[T](ssc, streamName, endpointUrl, validateRegion(regionName),
-        KinesisInitialPositions.fromKinesisInitialPosition(initialPositionInStream),
-        kinesisAppName, checkpointInterval, storageLevel,
+        initialPositionInStream, kinesisAppName, checkpointInterval, storageLevel,
         cleanedHandler, kinesisCredsProvider, None, None)
     }
   }
@@ -246,8 +243,7 @@ object KinesisUtils {
     // Setting scope to override receiver stream's scope of "receiver stream"
     ssc.withNamedScope("kinesis stream") {
       new KinesisInputDStream[Array[Byte]](ssc, streamName, endpointUrl, validateRegion(regionName),
-        KinesisInitialPositions.fromKinesisInitialPosition(initialPositionInStream),
-        kinesisAppName, checkpointInterval, storageLevel,
+        initialPositionInStream, kinesisAppName, checkpointInterval, storageLevel,
         KinesisInputDStream.defaultMessageHandler, DefaultCredentials, None, None)
     }
   }
@@ -297,8 +293,7 @@ object KinesisUtils {
         awsAccessKeyId = awsAccessKeyId,
         awsSecretKey = awsSecretKey)
       new KinesisInputDStream[Array[Byte]](ssc, streamName, endpointUrl, validateRegion(regionName),
-        KinesisInitialPositions.fromKinesisInitialPosition(initialPositionInStream),
-        kinesisAppName, checkpointInterval, storageLevel,
+        initialPositionInStream, kinesisAppName, checkpointInterval, storageLevel,
         KinesisInputDStream.defaultMessageHandler, kinesisCredsProvider, None, None)
     }
   }
@@ -434,7 +429,7 @@ object KinesisUtils {
    * @param awsSecretKey  AWS SecretKey (if null, will use DefaultAWSCredentialsProviderChain)
    * @param stsAssumeRoleArn ARN of IAM role to assume when using STS sessions to read from
    *                         Kinesis stream.
-   * @param stsSessionName Name to uniquely identify STS sessions if multiple princpals assume
+   * @param stsSessionName Name to uniquely identify STS sessions if multiple princples assume
    *                       the same role.
    * @param stsExternalId External ID that can be used to validate against the assumed IAM role's
    *                      trust policy.

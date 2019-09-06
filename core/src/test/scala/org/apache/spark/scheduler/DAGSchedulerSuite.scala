@@ -18,20 +18,18 @@
 package org.apache.spark.scheduler
 
 import java.util.Properties
-import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
 
 import scala.annotation.meta.param
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, Map}
+import scala.language.reflectiveCalls
 import scala.util.control.NonFatal
 
-import org.scalatest.concurrent.{Signaler, ThreadSignaler, TimeLimits}
+import org.scalatest.concurrent.Timeouts
 import org.scalatest.time.SpanSugar._
 
 import org.apache.spark._
 import org.apache.spark.broadcast.BroadcastManager
-import org.apache.spark.executor.ExecutorMetrics
-import org.apache.spark.internal.config
 import org.apache.spark.rdd.{DeterministicLevel, RDD}
 import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
 import org.apache.spark.shuffle.{FetchFailedException, MetadataFetchFailedException}
@@ -119,12 +117,9 @@ class MyRDD(
 
 class DAGSchedulerSuiteDummyException extends Exception
 
-class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLimits {
+class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with Timeouts {
 
   import DAGSchedulerSuite._
-
-  // Necessary to make ScalaTest 3.x interrupt a thread on the JVM like ScalaTest 2.2.x
-  implicit val defaultSignaler: Signaler = ThreadSignaler
 
   val conf = new SparkConf
   /** Set of TaskSets the DAGScheduler has requested executed. */
@@ -132,8 +127,6 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
 
   /** Stages for which the DAGScheduler has called TaskScheduler.cancelTasks(). */
   val cancelledStages = new HashSet[Int]()
-
-  val tasksMarkedAsCompleted = new ArrayBuffer[Task[_]]()
 
   val taskScheduler = new TaskScheduler() {
     override def schedulingMode: SchedulingMode = SchedulingMode.FIFO
@@ -143,8 +136,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     override def executorHeartbeatReceived(
         execId: String,
         accumUpdates: Array[(Long, Seq[AccumulatorV2[_, _]])],
-        blockManagerId: BlockManagerId,
-        executorUpdates: Map[(Int, Int), ExecutorMetrics]): Boolean = true
+        blockManagerId: BlockManagerId): Boolean = true
     override def submitTasks(taskSet: TaskSet) = {
       // normally done by TaskSetManager
       taskSet.tasks.foreach(_.epoch = mapOutputTracker.getEpoch)
@@ -155,31 +147,21 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     }
     override def killTaskAttempt(
       taskId: Long, interruptThread: Boolean, reason: String): Boolean = false
-    override def killAllTaskAttempts(
-      stageId: Int, interruptThread: Boolean, reason: String): Unit = {}
-    override def notifyPartitionCompletion(stageId: Int, partitionId: Int): Unit = {
-      taskSets.filter(_.stageId == stageId).lastOption.foreach { ts =>
-        val tasks = ts.tasks.filter(_.partitionId == partitionId)
-        assert(tasks.length == 1)
-        tasksMarkedAsCompleted += tasks.head
-      }
-    }
     override def setDAGScheduler(dagScheduler: DAGScheduler) = {}
     override def defaultParallelism() = 2
     override def executorLost(executorId: String, reason: ExecutorLossReason): Unit = {}
-    override def workerRemoved(workerId: String, host: String, message: String): Unit = {}
     override def applicationAttemptId(): Option[String] = None
   }
 
   /** Length of time to wait while draining listener events. */
   val WAIT_TIMEOUT_MILLIS = 10000
-
-  val submittedStageInfos = new HashSet[StageInfo]
-  val successfulStages = new HashSet[Int]
-  val failedStages = new ArrayBuffer[Int]
-  val stageByOrderOfExecution = new ArrayBuffer[Int]
-  val endedTasks = new HashSet[Long]
   val sparkListener = new SparkListener() {
+    val submittedStageInfos = new HashSet[StageInfo]
+    val successfulStages = new HashSet[Int]
+    val failedStages = new ArrayBuffer[Int]
+    val stageByOrderOfExecution = new ArrayBuffer[Int]
+    val endedTasks = new HashSet[Long]
+
     override def onStageSubmitted(stageSubmitted: SparkListenerStageSubmitted) {
       submittedStageInfos += stageSubmitted.stageInfo
     }
@@ -246,15 +228,14 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
   }
 
   private def init(testConf: SparkConf): Unit = {
-    sc = new SparkContext("local[2]", "DAGSchedulerSuite", testConf)
-    submittedStageInfos.clear()
-    successfulStages.clear()
-    failedStages.clear()
-    endedTasks.clear()
+    sc = new SparkContext("local", "DAGSchedulerSuite", testConf)
+    sparkListener.submittedStageInfos.clear()
+    sparkListener.successfulStages.clear()
+    sparkListener.failedStages.clear()
+    sparkListener.endedTasks.clear()
     failure = null
     sc.addSparkListener(sparkListener)
     taskSets.clear()
-    tasksMarkedAsCompleted.clear()
     cancelledStages.clear()
     cacheLocations.clear()
     results.clear()
@@ -373,11 +354,11 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
   }
 
   test("[SPARK-3353] parent stage should have lower stage id") {
-    stageByOrderOfExecution.clear()
+    sparkListener.stageByOrderOfExecution.clear()
     sc.parallelize(1 to 10).map(x => (x, x)).reduceByKey(_ + _, 4).count()
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(stageByOrderOfExecution.length === 2)
-    assert(stageByOrderOfExecution(0) < stageByOrderOfExecution(1))
+    assert(sparkListener.stageByOrderOfExecution.length === 2)
+    assert(sparkListener.stageByOrderOfExecution(0) < sparkListener.stageByOrderOfExecution(1))
   }
 
   /**
@@ -432,73 +413,6 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     complete(taskSets(3), Seq((Success, 42)))
     assert(results === Map(0 -> 42))
     assertDataStructuresEmpty()
-  }
-
-  test("All shuffle files on the slave should be cleaned up when slave lost") {
-    // reset the test context with the right shuffle service config
-    afterEach()
-    val conf = new SparkConf()
-    conf.set(config.SHUFFLE_SERVICE_ENABLED.key, "true")
-    conf.set("spark.files.fetchFailure.unRegisterOutputOnHost", "true")
-    init(conf)
-    runEvent(ExecutorAdded("exec-hostA1", "hostA"))
-    runEvent(ExecutorAdded("exec-hostA2", "hostA"))
-    runEvent(ExecutorAdded("exec-hostB", "hostB"))
-    val firstRDD = new MyRDD(sc, 3, Nil)
-    val firstShuffleDep = new ShuffleDependency(firstRDD, new HashPartitioner(3))
-    val firstShuffleId = firstShuffleDep.shuffleId
-    val shuffleMapRdd = new MyRDD(sc, 3, List(firstShuffleDep))
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(3))
-    val secondShuffleId = shuffleDep.shuffleId
-    val reduceRdd = new MyRDD(sc, 1, List(shuffleDep))
-    submit(reduceRdd, Array(0))
-    // map stage1 completes successfully, with one task on each executor
-    complete(taskSets(0), Seq(
-      (Success,
-        MapStatus(BlockManagerId("exec-hostA1", "hostA", 12345), Array.fill[Long](1)(2))),
-      (Success,
-        MapStatus(BlockManagerId("exec-hostA2", "hostA", 12345), Array.fill[Long](1)(2))),
-      (Success, makeMapStatus("hostB", 1))
-    ))
-    // map stage2 completes successfully, with one task on each executor
-    complete(taskSets(1), Seq(
-      (Success,
-        MapStatus(BlockManagerId("exec-hostA1", "hostA", 12345), Array.fill[Long](1)(2))),
-      (Success,
-        MapStatus(BlockManagerId("exec-hostA2", "hostA", 12345), Array.fill[Long](1)(2))),
-      (Success, makeMapStatus("hostB", 1))
-    ))
-    // make sure our test setup is correct
-    val initialMapStatus1 = mapOutputTracker.shuffleStatuses(firstShuffleId).mapStatuses
-    //  val initialMapStatus1 = mapOutputTracker.mapStatuses.get(0).get
-    assert(initialMapStatus1.count(_ != null) === 3)
-    assert(initialMapStatus1.map{_.location.executorId}.toSet ===
-      Set("exec-hostA1", "exec-hostA2", "exec-hostB"))
-
-    val initialMapStatus2 = mapOutputTracker.shuffleStatuses(secondShuffleId).mapStatuses
-    //  val initialMapStatus1 = mapOutputTracker.mapStatuses.get(0).get
-    assert(initialMapStatus2.count(_ != null) === 3)
-    assert(initialMapStatus2.map{_.location.executorId}.toSet ===
-      Set("exec-hostA1", "exec-hostA2", "exec-hostB"))
-
-    // reduce stage fails with a fetch failure from one host
-    complete(taskSets(2), Seq(
-      (FetchFailed(BlockManagerId("exec-hostA2", "hostA", 12345), firstShuffleId, 0, 0, "ignored"),
-        null)
-    ))
-
-    // Here is the main assertion -- make sure that we de-register
-    // the map outputs for both map stage from both executors on hostA
-
-    val mapStatus1 = mapOutputTracker.shuffleStatuses(firstShuffleId).mapStatuses
-    assert(mapStatus1.count(_ != null) === 1)
-    assert(mapStatus1(2).location.executorId === "exec-hostB")
-    assert(mapStatus1(2).location.host === "hostB")
-
-    val mapStatus2 = mapOutputTracker.shuffleStatuses(secondShuffleId).mapStatuses
-    assert(mapStatus2.count(_ != null) === 1)
-    assert(mapStatus2(2).location.executorId === "exec-hostB")
-    assert(mapStatus2(2).location.host === "hostB")
   }
 
   test("zero split job") {
@@ -603,7 +517,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     var rdd: RDD[_] = new MyRDD(sc, 1, Nil)
     (1 to 30).foreach(_ => rdd = rdd.zip(rdd))
     // getPreferredLocs runs quickly, indicating that exponential graph traversal is avoided.
-    failAfter(10.seconds) {
+    failAfter(10 seconds) {
       val preferredLocs = scheduler.getPreferredLocs(rdd, 0)
       // No preferred locations are returned.
       assert(preferredLocs.length === 0)
@@ -619,8 +533,8 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     assert(failure.getMessage.startsWith(
       "Job aborted due to stage failure: Task not serializable:"))
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failedStages.contains(0))
-    assert(failedStages.size === 1)
+    assert(sparkListener.failedStages.contains(0))
+    assert(sparkListener.failedStages.size === 1)
     assertDataStructuresEmpty()
   }
 
@@ -629,8 +543,8 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     failed(taskSets(0), "some failure")
     assert(failure.getMessage === "Job aborted due to stage failure: some failure")
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failedStages.contains(0))
-    assert(failedStages.size === 1)
+    assert(sparkListener.failedStages.contains(0))
+    assert(sparkListener.failedStages.size === 1)
     assertDataStructuresEmpty()
   }
 
@@ -640,8 +554,8 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     cancel(jobId)
     assert(failure.getMessage === s"Job $jobId cancelled ")
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failedStages.contains(0))
-    assert(failedStages.size === 1)
+    assert(sparkListener.failedStages.contains(0))
+    assert(sparkListener.failedStages.size === 1)
     assertDataStructuresEmpty()
   }
 
@@ -663,22 +577,13 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
           taskId: Long, interruptThread: Boolean, reason: String): Boolean = {
         throw new UnsupportedOperationException
       }
-      override def killAllTaskAttempts(
-          stageId: Int, interruptThread: Boolean, reason: String): Unit = {
-        throw new UnsupportedOperationException
-      }
-      override def notifyPartitionCompletion(stageId: Int, partitionId: Int): Unit = {
-        throw new UnsupportedOperationException
-      }
       override def setDAGScheduler(dagScheduler: DAGScheduler): Unit = {}
       override def defaultParallelism(): Int = 2
       override def executorHeartbeatReceived(
           execId: String,
           accumUpdates: Array[(Long, Seq[AccumulatorV2[_, _]])],
-          blockManagerId: BlockManagerId,
-          executorUpdates: Map[(Int, Int), ExecutorMetrics]): Boolean = true
+          blockManagerId: BlockManagerId): Boolean = true
       override def executorLost(executorId: String, reason: ExecutorLossReason): Unit = {}
-      override def workerRemoved(workerId: String, host: String, message: String): Unit = {}
       override def applicationAttemptId(): Option[String] = None
     }
     val noKillScheduler = new DAGScheduler(
@@ -700,8 +605,8 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     assertDataStructuresEmpty()
 
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failedStages.isEmpty)
-    assert(successfulStages.contains(0))
+    assert(sparkListener.failedStages.isEmpty)
+    assert(sparkListener.successfulStages.contains(0))
   }
 
   test("run trivial shuffle") {
@@ -764,7 +669,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
       // reset the test context with the right shuffle service config
       afterEach()
       val conf = new SparkConf()
-      conf.set(config.SHUFFLE_SERVICE_ENABLED.key, shuffleServiceOn.toString)
+      conf.set("spark.shuffle.service.enabled", shuffleServiceOn.toString)
       init(conf)
       assert(sc.env.blockManager.externalShuffleServiceEnabled == shuffleServiceOn)
 
@@ -796,7 +701,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
 
   // Helper functions to extract commonly used code in Fetch Failure test cases
   private def setupStageAbortTest(sc: SparkContext) {
-    sc.listenerBus.addToSharedQueue(new EndListener())
+    sc.listenerBus.addListener(new EndListener())
     ended = false
     jobResult = null
   }
@@ -903,7 +808,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
 
     // Confirm job finished successfully
     sc.listenerBus.waitUntilEmpty(1000)
-    assert(ended)
+    assert(ended === true)
     assert(results === (0 until parts).map { idx => idx -> 42 }.toMap)
     assertDataStructuresEmpty()
   }
@@ -1062,7 +967,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
 
     assertDataStructuresEmpty()
     sc.listenerBus.waitUntilEmpty(1000)
-    assert(ended)
+    assert(ended === true)
     assert(results === Map(0 -> 42))
   }
 
@@ -1085,7 +990,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
       FetchFailed(makeBlockManagerId("hostA"), shuffleId, 0, 0, "ignored"),
       null))
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failedStages.contains(1))
+    assert(sparkListener.failedStages.contains(1))
 
     // The second ResultTask fails, with a fetch failure for the output from the second mapper.
     runEvent(makeCompletionEvent(
@@ -1094,92 +999,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
       null))
     // The SparkListener should not receive redundant failure events.
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failedStages.size == 1)
-  }
-
-  test("Retry all the tasks on a resubmitted attempt of a barrier stage caused by FetchFailure") {
-    val shuffleMapRdd = new MyRDD(sc, 2, Nil).barrier().mapPartitions(iter => iter)
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
-    val shuffleId = shuffleDep.shuffleId
-    val reduceRdd = new MyRDD(sc, 2, List(shuffleDep), tracker = mapOutputTracker)
-    submit(reduceRdd, Array(0, 1))
-    complete(taskSets(0), Seq(
-      (Success, makeMapStatus("hostA", reduceRdd.partitions.length)),
-      (Success, makeMapStatus("hostB", reduceRdd.partitions.length))))
-    assert(mapOutputTracker.findMissingPartitions(shuffleId) === Some(Seq.empty))
-
-    // The first result task fails, with a fetch failure for the output from the first mapper.
-    runEvent(makeCompletionEvent(
-      taskSets(1).tasks(0),
-      FetchFailed(makeBlockManagerId("hostA"), shuffleId, 0, 0, "ignored"),
-      null))
-    assert(mapOutputTracker.findMissingPartitions(shuffleId) === Some(Seq(0, 1)))
-
-    scheduler.resubmitFailedStages()
-    // Complete the map stage.
-    completeShuffleMapStageSuccessfully(0, 1, numShufflePartitions = 2)
-
-    // Complete the result stage.
-    completeNextResultStageWithSuccess(1, 1)
-
-    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assertDataStructuresEmpty()
-  }
-
-  test("Retry all the tasks on a resubmitted attempt of a barrier stage caused by TaskKilled") {
-    val shuffleMapRdd = new MyRDD(sc, 2, Nil).barrier().mapPartitions(iter => iter)
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
-    val shuffleId = shuffleDep.shuffleId
-    val reduceRdd = new MyRDD(sc, 2, List(shuffleDep), tracker = mapOutputTracker)
-    submit(reduceRdd, Array(0, 1))
-    complete(taskSets(0), Seq(
-      (Success, makeMapStatus("hostA", reduceRdd.partitions.length))))
-    assert(mapOutputTracker.findMissingPartitions(shuffleId) === Some(Seq(1)))
-
-    // The second map task fails with TaskKilled.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(1),
-      TaskKilled("test"),
-      null))
-    assert(failedStages === Seq(0))
-    assert(mapOutputTracker.findMissingPartitions(shuffleId) === Some(Seq(0, 1)))
-
-    scheduler.resubmitFailedStages()
-    // Complete the map stage.
-    completeShuffleMapStageSuccessfully(0, 1, numShufflePartitions = 2)
-
-    // Complete the result stage.
-    completeNextResultStageWithSuccess(1, 0)
-
-    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assertDataStructuresEmpty()
-  }
-
-  test("Fail the job if a barrier ResultTask failed") {
-    val shuffleMapRdd = new MyRDD(sc, 2, Nil)
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
-    val shuffleId = shuffleDep.shuffleId
-    val reduceRdd = new MyRDD(sc, 2, List(shuffleDep), tracker = mapOutputTracker)
-      .barrier()
-      .mapPartitions(iter => iter)
-    submit(reduceRdd, Array(0, 1))
-
-    // Complete the map stage.
-    complete(taskSets(0), Seq(
-      (Success, makeMapStatus("hostA", 2)),
-      (Success, makeMapStatus("hostA", 2))))
-    assert(mapOutputTracker.findMissingPartitions(shuffleId) === Some(Seq.empty))
-
-    // The first ResultTask fails
-    runEvent(makeCompletionEvent(
-      taskSets(1).tasks(0),
-      TaskKilled("test"),
-      null))
-
-    // Assert the stage has been cancelled.
-    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failure.getMessage.startsWith("Job aborted due to stage failure: Could not recover " +
-      "from a failed barrier ResultStage."))
+    assert(sparkListener.failedStages.size == 1)
   }
 
   /**
@@ -1195,7 +1015,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
 
     val mapStageId = 0
     def countSubmittedMapStageAttempts(): Int = {
-      submittedStageInfos.count(_.stageId == mapStageId)
+      sparkListener.submittedStageInfos.count(_.stageId == mapStageId)
     }
 
     // The map stage should have been submitted.
@@ -1217,7 +1037,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
       FetchFailed(makeBlockManagerId("hostA"), shuffleId, 0, 0, "ignored"),
       null))
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failedStages.contains(1))
+    assert(sparkListener.failedStages.contains(1))
 
     // Trigger resubmission of the failed map stage.
     runEvent(ResubmitFailedStages)
@@ -1256,10 +1076,10 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     submit(reduceRdd, Array(0, 1))
 
     def countSubmittedReduceStageAttempts(): Int = {
-      submittedStageInfos.count(_.stageId == 1)
+      sparkListener.submittedStageInfos.count(_.stageId == 1)
     }
     def countSubmittedMapStageAttempts(): Int = {
-      submittedStageInfos.count(_.stageId == 0)
+      sparkListener.submittedStageInfos.count(_.stageId == 0)
     }
 
     // The map stage should have been submitted.
@@ -1313,24 +1133,24 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     // complete two tasks
     runEvent(makeCompletionEvent(
       taskSets(0).tasks(0), Success, 42,
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(0)))
+      Seq.empty, createFakeTaskInfoWithId(0)))
     runEvent(makeCompletionEvent(
       taskSets(0).tasks(1), Success, 42,
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(1)))
+      Seq.empty, createFakeTaskInfoWithId(1)))
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
     // verify stage exists
     assert(scheduler.stageIdToStage.contains(0))
-    assert(endedTasks.size == 2)
+    assert(sparkListener.endedTasks.size == 2)
 
     // finish other 2 tasks
     runEvent(makeCompletionEvent(
       taskSets(0).tasks(2), Success, 42,
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(2)))
+      Seq.empty, createFakeTaskInfoWithId(2)))
     runEvent(makeCompletionEvent(
       taskSets(0).tasks(3), Success, 42,
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(3)))
+      Seq.empty, createFakeTaskInfoWithId(3)))
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(endedTasks.size == 4)
+    assert(sparkListener.endedTasks.size == 4)
 
     // verify the stage is done
     assert(!scheduler.stageIdToStage.contains(0))
@@ -1339,16 +1159,16 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     // with a speculative task and make sure the event is sent out
     runEvent(makeCompletionEvent(
       taskSets(0).tasks(3), Success, 42,
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(5)))
+      Seq.empty, createFakeTaskInfoWithId(5)))
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(endedTasks.size == 5)
+    assert(sparkListener.endedTasks.size == 5)
 
     // make sure non successful tasks also send out event
     runEvent(makeCompletionEvent(
       taskSets(0).tasks(3), UnknownReason, 42,
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(6)))
+      Seq.empty, createFakeTaskInfoWithId(6)))
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(endedTasks.size == 6)
+    assert(sparkListener.endedTasks.size == 6)
   }
 
   test("ignore late map task completions") {
@@ -1422,7 +1242,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     // Listener bus should get told about the map stage failing, but not the reduce stage
     // (since the reduce stage hasn't been started yet).
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(failedStages.toSet === Set(0))
+    assert(sparkListener.failedStages.toSet === Set(0))
 
     assertDataStructuresEmpty()
   }
@@ -1476,10 +1296,10 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
    */
   test("don't submit stage until its dependencies map outputs are registered (SPARK-5259)") {
     val firstRDD = new MyRDD(sc, 3, Nil)
-    val firstShuffleDep = new ShuffleDependency(firstRDD, new HashPartitioner(3))
+    val firstShuffleDep = new ShuffleDependency(firstRDD, new HashPartitioner(2))
     val firstShuffleId = firstShuffleDep.shuffleId
     val shuffleMapRdd = new MyRDD(sc, 3, List(firstShuffleDep))
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(1))
+    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
     val reduceRdd = new MyRDD(sc, 1, List(shuffleDep))
     submit(reduceRdd, Array(0))
 
@@ -1666,8 +1486,8 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
 
     // Make sure the listeners got told about both failed stages.
     sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(successfulStages.isEmpty)
-    assert(failedStages.toSet === Set(0, 2))
+    assert(sparkListener.successfulStages.isEmpty)
+    assert(sparkListener.failedStages.toSet === Set(0, 2))
 
     assert(listener1.failureMessage === s"Job aborted due to stage failure: $stageFailureMessage")
     assert(listener2.failureMessage === s"Job aborted due to stage failure: $stageFailureMessage")
@@ -1782,7 +1602,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
    */
   test("run trivial shuffle with out-of-band executor failure and retry") {
     val shuffleMapRdd = new MyRDD(sc, 2, Nil)
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(1))
+    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
     val shuffleId = shuffleDep.shuffleId
     val reduceRdd = new MyRDD(sc, 1, List(shuffleDep), tracker = mapOutputTracker)
     submit(reduceRdd, Array(0))
@@ -1914,50 +1734,27 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
   }
 
   /**
-   * The job will be failed on first task throwing an error.
+   * The job will be failed on first task throwing a DAGSchedulerSuiteDummyException.
    *  Any subsequent task WILL throw a legitimate java.lang.UnsupportedOperationException.
    *  If multiple tasks, there exists a race condition between the SparkDriverExecutionExceptions
    *  and their differing causes as to which will represent result for job...
    */
   test("misbehaved resultHandler should not crash DAGScheduler and SparkContext") {
-    failAfter(1.minute) { // If DAGScheduler crashes, the following test will hang forever
-      for (error <- Seq(
-        new DAGSchedulerSuiteDummyException,
-        new AssertionError, // E.g., assert(foo == bar) fails
-        new NotImplementedError // E.g., call a method with `???` implementation.
-      )) {
-        val e = intercept[SparkDriverExecutionException] {
-          // Number of parallelized partitions implies number of tasks of job
-          val rdd = sc.parallelize(1 to 10, 2)
-          sc.runJob[Int, Int](
-            rdd,
-            (context: TaskContext, iter: Iterator[Int]) => iter.size,
-            // For a robust test assertion, limit number of job tasks to 1; that is,
-            // if multiple RDD partitions, use id of any one partition, say, first partition id=0
-            Seq(0),
-            (part: Int, result: Int) => throw error)
-        }
-        assert(e.getCause eq error)
-
-        // Make sure we can still run commands on our SparkContext
-        assert(sc.parallelize(1 to 10, 2).count() === 10)
-      }
+    val e = intercept[SparkDriverExecutionException] {
+      // Number of parallelized partitions implies number of tasks of job
+      val rdd = sc.parallelize(1 to 10, 2)
+      sc.runJob[Int, Int](
+        rdd,
+        (context: TaskContext, iter: Iterator[Int]) => iter.size,
+        // For a robust test assertion, limit number of job tasks to 1; that is,
+        // if multiple RDD partitions, use id of any one partition, say, first partition id=0
+        Seq(0),
+        (part: Int, result: Int) => throw new DAGSchedulerSuiteDummyException)
     }
-  }
+    assert(e.getCause.isInstanceOf[DAGSchedulerSuiteDummyException])
 
-  test(s"invalid ${SparkContext.SPARK_JOB_INTERRUPT_ON_CANCEL} should not crash DAGScheduler") {
-    sc.setLocalProperty(SparkContext.SPARK_JOB_INTERRUPT_ON_CANCEL, "invalid")
-    try {
-      intercept[SparkException] {
-        sc.parallelize(1 to 1, 1).foreach { _ =>
-          throw new DAGSchedulerSuiteDummyException
-        }
-      }
-      // Verify the above job didn't crash DAGScheduler by running a simple job
-      assert(sc.parallelize(1 to 10, 2).count() === 10)
-    } finally {
-      sc.setLocalProperty(SparkContext.SPARK_JOB_INTERRUPT_ON_CANCEL, null)
-    }
+    // Make sure we can still run commands on our SparkContext
+    assert(sc.parallelize(1 to 10, 2).count() === 10)
   }
 
   test("getPartitions exceptions should not crash DAGScheduler and SparkContext (SPARK-8606)") {
@@ -2002,27 +1799,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     assertDataStructuresEmpty()
   }
 
-  test("accumulator not calculated for resubmitted task in result stage") {
-    val accum = AccumulatorSuite.createLongAccum("a")
-    val finalRdd = new MyRDD(sc, 2, Nil)
-    submit(finalRdd, Array(0, 1))
-    // finish the first task
-    completeWithAccumulator(accum.id, taskSets(0), Seq((Success, 42)))
-    // verify stage exists
-    assert(scheduler.stageIdToStage.contains(0))
-
-    // finish the first task again (simulate a speculative task or a resubmitted task)
-    completeWithAccumulator(accum.id, taskSets(0), Seq((Success, 42)))
-    assert(results === Map(0 -> 42))
-
-    // The accumulator should only be updated once.
-    assert(accum.value === 1)
-
-    runEvent(makeCompletionEvent(taskSets(0).tasks(1), Success, 42))
-    assertDataStructuresEmpty()
-  }
-
-  test("accumulators are updated on exception failures and task killed") {
+  test("accumulators are updated on exception failures") {
     val acc1 = AccumulatorSuite.createLongAccum("ingenieur")
     val acc2 = AccumulatorSuite.createLongAccum("boulanger")
     val acc3 = AccumulatorSuite.createLongAccum("agriculteur")
@@ -2038,31 +1815,22 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     val accUpdate3 = new LongAccumulator
     accUpdate3.metadata = acc3.metadata
     accUpdate3.setValue(18)
-
-    val accumUpdates1 = Seq(accUpdate1, accUpdate2)
-    val accumInfo1 = accumUpdates1.map(AccumulatorSuite.makeInfo)
+    val accumUpdates = Seq(accUpdate1, accUpdate2, accUpdate3)
+    val accumInfo = accumUpdates.map(AccumulatorSuite.makeInfo)
     val exceptionFailure = new ExceptionFailure(
       new SparkException("fondue?"),
-      accumInfo1).copy(accums = accumUpdates1)
+      accumInfo).copy(accums = accumUpdates)
     submit(new MyRDD(sc, 1, Nil), Array(0))
     runEvent(makeCompletionEvent(taskSets.head.tasks.head, exceptionFailure, "result"))
-
     assert(AccumulatorContext.get(acc1.id).get.value === 15L)
     assert(AccumulatorContext.get(acc2.id).get.value === 13L)
-
-    val accumUpdates2 = Seq(accUpdate3)
-    val accumInfo2 = accumUpdates2.map(AccumulatorSuite.makeInfo)
-
-    val taskKilled = new TaskKilled( "test", accumInfo2, accums = accumUpdates2)
-    runEvent(makeCompletionEvent(taskSets.head.tasks.head, taskKilled, "result"))
-
     assert(AccumulatorContext.get(acc3.id).get.value === 18L)
   }
 
   test("reduce tasks should be placed locally with map output") {
     // Create a shuffleMapRdd with 1 partition
     val shuffleMapRdd = new MyRDD(sc, 1, Nil)
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(1))
+    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
     val shuffleId = shuffleDep.shuffleId
     val reduceRdd = new MyRDD(sc, 1, List(shuffleDep), tracker = mapOutputTracker)
     submit(reduceRdd, Array(0))
@@ -2325,58 +2093,6 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     assertDataStructuresEmpty()
   }
 
-  test("Trigger mapstage's job listener in submitMissingTasks") {
-    val rdd1 = new MyRDD(sc, 2, Nil)
-    val dep1 = new ShuffleDependency(rdd1, new HashPartitioner(2))
-    val rdd2 = new MyRDD(sc, 2, List(dep1), tracker = mapOutputTracker)
-    val dep2 = new ShuffleDependency(rdd2, new HashPartitioner(2))
-
-    val listener1 = new SimpleListener
-    val listener2 = new SimpleListener
-
-    submitMapStage(dep1, listener1)
-    submitMapStage(dep2, listener2)
-
-    // Complete the stage0.
-    assert(taskSets(0).stageId === 0)
-    complete(taskSets(0), Seq(
-      (Success, makeMapStatus("hostA", rdd1.partitions.length)),
-      (Success, makeMapStatus("hostB", rdd1.partitions.length))))
-    assert(mapOutputTracker.getMapSizesByExecutorId(dep1.shuffleId, 0).map(_._1).toSet ===
-        HashSet(makeBlockManagerId("hostA"), makeBlockManagerId("hostB")))
-    assert(listener1.results.size === 1)
-
-    // When attempting stage1, trigger a fetch failure.
-    assert(taskSets(1).stageId === 1)
-    complete(taskSets(1), Seq(
-      (Success, makeMapStatus("hostC", rdd2.partitions.length)),
-      (FetchFailed(makeBlockManagerId("hostA"), dep1.shuffleId, 0, 0, "ignored"), null)))
-    scheduler.resubmitFailedStages()
-    // Stage1 listener should not have a result yet
-    assert(listener2.results.size === 0)
-
-    // Speculative task succeeded in stage1.
-    runEvent(makeCompletionEvent(
-      taskSets(1).tasks(1),
-      Success,
-      makeMapStatus("hostD", rdd2.partitions.length)))
-    // stage1 listener still should not have a result, though there's no missing partitions
-    // in it. Because stage1 has been failed and is not inside `runningStages` at this moment.
-    assert(listener2.results.size === 0)
-
-    // Stage0 should now be running as task set 2; make its task succeed
-    assert(taskSets(2).stageId === 0)
-    complete(taskSets(2), Seq(
-      (Success, makeMapStatus("hostC", rdd2.partitions.length))))
-    assert(mapOutputTracker.getMapSizesByExecutorId(dep1.shuffleId, 0).map(_._1).toSet ===
-        Set(makeBlockManagerId("hostC"), makeBlockManagerId("hostB")))
-
-    // After stage0 is finished, stage1 will be submitted and found there is no missing
-    // partitions in it. Then listener got triggered.
-    assert(listener2.results.size === 1)
-    assertDataStructuresEmpty()
-  }
-
   /**
    * In this test, we run a map stage where one of the executors fails but we still receive a
    * "zombie" complete message from that executor. We want to make sure the stage is not reported
@@ -2452,7 +2168,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
    *
    * A <------------s---------,
    *                           \
-   * B <--s-- C <--s-- D <--n------ E
+   * B <--s-- C <--s-- D <--n---`-- E
    *
    * Here, the direct shuffle dependency of C is just the shuffle dependency on B. The direct
    * shuffle dependencies of E are the shuffle dependency on A and the shuffle dependency on C.
@@ -2492,6 +2208,9 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
 
     // Runs a job that encounters a single fetch failure but succeeds on the second attempt
     def runJobWithTemporaryFetchFailure: Unit = {
+      object FailThisAttempt {
+        val _fail = new AtomicBoolean(true)
+      }
       val rdd1 = sc.makeRDD(Array(1, 2, 3, 4), 2).map(x => (x, 1)).groupByKey()
       val shuffleHandle =
         rdd1.dependencies.head.asInstanceOf[ShuffleDependency[_, _, _]].shuffleHandle
@@ -2571,11 +2290,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     runEvent(makeCompletionEvent(
       taskSets(1).tasks(1), Success, makeMapStatus("hostA", 2)))
 
-    // task(stageId=1, stageAttemptId=1, partitionId=1) should be marked completed when
-    // task(stageId=1, stageAttemptId=0, partitionId=1) finished
-    // ideally we would verify that but no way to get into task scheduler to verify
-
-    // Both tasks in rddB should be resubmitted, because none of them has succeeded truly.
+    // Both tasks in rddB should be resubmitted, because none of them has succeeded truely.
     // Complete the task(stageId=1, stageAttemptId=1, partitionId=0) successfully.
     // Task(stageId=1, stageAttemptId=1, partitionId=1) of this new active stage attempt
     // is still running.
@@ -2584,21 +2299,19 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     runEvent(makeCompletionEvent(
       taskSets(3).tasks(0), Success, makeMapStatus("hostB", 2)))
 
-    // At this point there should be no active task set for stageId=1 and we need
-    // to resubmit because the output from (stageId=1, stageAttemptId=0, partitionId=1)
-    // was ignored due to executor failure
-    assert(taskSets.size === 5)
-    assert(taskSets(4).stageId === 1 && taskSets(4).stageAttemptId === 2
-      && taskSets(4).tasks.size === 1)
+    // There should be no new attempt of stage submitted,
+    // because task(stageId=1, stageAttempt=1, partitionId=1) is still running in
+    // the current attempt (and hasn't completed successfully in any earlier attempts).
+    assert(taskSets.size === 4)
 
-    // Complete task(stageId=1, stageAttempt=2, partitionId=1) successfully.
+    // Complete task(stageId=1, stageAttempt=1, partitionId=1) successfully.
     runEvent(makeCompletionEvent(
-      taskSets(4).tasks(0), Success, makeMapStatus("hostB", 2)))
+      taskSets(3).tasks(1), Success, makeMapStatus("hostB", 2)))
 
     // Now the ResultStage should be submitted, because all of the tasks of rddB have
     // completed successfully on alive executors.
-    assert(taskSets.size === 6 && taskSets(5).tasks(0).isInstanceOf[ResultTask[_, _]])
-    complete(taskSets(5), Seq(
+    assert(taskSets.size === 5 && taskSets(4).tasks(0).isInstanceOf[ResultTask[_, _]])
+    complete(taskSets(4), Seq(
       (Success, 1),
       (Success, 1)))
   }
@@ -2633,83 +2346,6 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     }
   }
 
-  test("Barrier task failures from the same stage attempt don't trigger multiple stage retries") {
-    val shuffleMapRdd = new MyRDD(sc, 2, Nil).barrier().mapPartitions(iter => iter)
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
-    val reduceRdd = new MyRDD(sc, 2, List(shuffleDep), tracker = mapOutputTracker)
-    submit(reduceRdd, Array(0, 1))
-
-    val mapStageId = 0
-    def countSubmittedMapStageAttempts(): Int = {
-      submittedStageInfos.count(_.stageId == mapStageId)
-    }
-
-    // The map stage should have been submitted.
-    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(countSubmittedMapStageAttempts() === 1)
-
-    // The first map task fails with TaskKilled.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(0),
-      TaskKilled("test"),
-      null))
-    assert(failedStages === Seq(0))
-
-    // The second map task fails with TaskKilled.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(1),
-      TaskKilled("test"),
-      null))
-
-    // Trigger resubmission of the failed map stage.
-    runEvent(ResubmitFailedStages)
-    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-
-    // Another attempt for the map stage should have been submitted, resulting in 2 total attempts.
-    assert(countSubmittedMapStageAttempts() === 2)
-  }
-
-  test("Barrier task failures from a previous stage attempt don't trigger stage retry") {
-    val shuffleMapRdd = new MyRDD(sc, 2, Nil).barrier().mapPartitions(iter => iter)
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
-    val reduceRdd = new MyRDD(sc, 2, List(shuffleDep), tracker = mapOutputTracker)
-    submit(reduceRdd, Array(0, 1))
-
-    val mapStageId = 0
-    def countSubmittedMapStageAttempts(): Int = {
-      submittedStageInfos.count(_.stageId == mapStageId)
-    }
-
-    // The map stage should have been submitted.
-    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(countSubmittedMapStageAttempts() === 1)
-
-    // The first map task fails with TaskKilled.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(0),
-      TaskKilled("test"),
-      null))
-    assert(failedStages === Seq(0))
-
-    // Trigger resubmission of the failed map stage.
-    runEvent(ResubmitFailedStages)
-    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-
-    // Another attempt for the map stage should have been submitted, resulting in 2 total attempts.
-    assert(countSubmittedMapStageAttempts() === 2)
-
-    // The second map task fails with TaskKilled.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(1),
-      TaskKilled("test"),
-      null))
-
-    // The second map task failure doesn't trigger stage retry.
-    runEvent(ResubmitFailedStages)
-    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
-    assert(countSubmittedMapStageAttempts() === 2)
-  }
-
   test("SPARK-23207: retry all the succeeding stages when the map stage is indeterminate") {
     val shuffleMapRdd1 = new MyRDD(sc, 2, Nil, indeterminate = true)
 
@@ -2741,11 +2377,27 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
       FetchFailed(makeBlockManagerId("hostC"), shuffleId2, 0, 0, "ignored"),
       null))
 
-    // The second shuffle map stage need to rerun, the job will abort for the indeterminate
-    // stage rerun.
-    // TODO: After we support re-generate shuffle file(SPARK-25341), this test will be extended.
-    assert(failure != null && failure.getMessage
-      .contains("Spark cannot rollback the ShuffleMapStage 1"))
+    val failedStages = scheduler.failedStages.toSeq
+    assert(failedStages.length == 2)
+    // Shuffle blocks of "hostC" is lost, so first task of the `shuffleMapRdd2` needs to retry.
+    assert(failedStages.collect {
+      case stage: ShuffleMapStage if stage.shuffleDep.shuffleId == shuffleId2 => stage
+    }.head.findMissingPartitions() == Seq(0))
+    // The result stage is still waiting for its 2 tasks to complete
+    assert(failedStages.collect {
+      case stage: ResultStage => stage
+    }.head.findMissingPartitions() == Seq(0, 1))
+
+    scheduler.resubmitFailedStages()
+
+    // The first task of the `shuffleMapRdd2` failed with fetch failure
+    runEvent(makeCompletionEvent(
+      taskSets(3).tasks(0),
+      FetchFailed(makeBlockManagerId("hostA"), shuffleId1, 0, 0, "ignored"),
+      null))
+
+    // The job should fail because Spark can't rollback the shuffle map stage.
+    assert(failure != null && failure.getMessage.contains("Spark cannot rollback"))
   }
 
   private def assertResultStageFailToRollback(mapRdd: MyRDD): Unit = {
@@ -2761,7 +2413,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     // Finish the first task of the result stage
     runEvent(makeCompletionEvent(
       taskSets.last.tasks(0), Success, 42,
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(0)))
+      Seq.empty, createFakeTaskInfoWithId(0)))
 
     // Fail the second task with FetchFailed.
     runEvent(makeCompletionEvent(
@@ -2804,7 +2456,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
     // Finish the first task of the result stage
     runEvent(makeCompletionEvent(
       taskSets.last.tasks(0), Success, 42,
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(0)))
+      Seq.empty, createFakeTaskInfoWithId(0)))
 
     // Fail the second task with FetchFailed.
     runEvent(makeCompletionEvent(
@@ -2826,112 +2478,18 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
   }
 
   test("SPARK-23207: reliable checkpoint can avoid rollback (checkpointed before)") {
-    withTempDir { dir =>
-      sc.setCheckpointDir(dir.getCanonicalPath)
-      val shuffleMapRdd = new MyCheckpointRDD(sc, 2, Nil, indeterminate = true)
-      shuffleMapRdd.checkpoint()
-      shuffleMapRdd.doCheckpoint()
-      assertResultStageNotRollbacked(shuffleMapRdd)
-    }
+    sc.setCheckpointDir(Utils.createTempDir().getCanonicalPath)
+    val shuffleMapRdd = new MyCheckpointRDD(sc, 2, Nil, indeterminate = true)
+    shuffleMapRdd.checkpoint()
+    shuffleMapRdd.doCheckpoint()
+    assertResultStageNotRollbacked(shuffleMapRdd)
   }
 
   test("SPARK-23207: reliable checkpoint fail to rollback (checkpointing now)") {
-    withTempDir { dir =>
-      sc.setCheckpointDir(dir.getCanonicalPath)
-      val shuffleMapRdd = new MyCheckpointRDD(sc, 2, Nil, indeterminate = true)
-      shuffleMapRdd.checkpoint()
-      assertResultStageFailToRollback(shuffleMapRdd)
-    }
-  }
-
-  test("SPARK-27164: RDD.countApprox on empty RDDs schedules jobs which never complete") {
-    val latch = new CountDownLatch(1)
-    val jobListener = new SparkListener {
-      override def onJobEnd(jobEnd: SparkListenerJobEnd): Unit = {
-        latch.countDown()
-      }
-    }
-    sc.addSparkListener(jobListener)
-    sc.emptyRDD[Int].countApprox(10000).getFinalValue()
-    assert(latch.await(10, TimeUnit.SECONDS))
-  }
-
-  test("SPARK-28699: abort stage if parent stage is indeterminate stage") {
-    val shuffleMapRdd = new MyRDD(sc, 2, Nil, indeterminate = true)
-
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
-    val shuffleId = shuffleDep.shuffleId
-    val finalRdd = new MyRDD(sc, 2, List(shuffleDep), tracker = mapOutputTracker)
-
-    submit(finalRdd, Array(0, 1))
-
-    // Finish the first shuffle map stage.
-    complete(taskSets(0), Seq(
-      (Success, makeMapStatus("hostA", 2)),
-      (Success, makeMapStatus("hostB", 2))))
-    assert(mapOutputTracker.findMissingPartitions(shuffleId) === Some(Seq.empty))
-
-    runEvent(makeCompletionEvent(
-      taskSets(1).tasks(0),
-      FetchFailed(makeBlockManagerId("hostA"), shuffleId, 0, 0, "ignored"),
-      null))
-
-    // Shuffle blocks of "hostA" is lost, so first task of the `shuffleMapRdd` needs to retry.
-    // The result stage is still waiting for its 2 tasks to complete.
-    // Because of shuffleMapRdd is indeterminate, this job will be abort.
-    assert(failure != null && failure.getMessage
-      .contains("Spark cannot rollback the ShuffleMapStage 0"))
-  }
-
-  test("Completions in zombie tasksets update status of non-zombie taskset") {
-    val parts = 4
-    val shuffleMapRdd = new MyRDD(sc, parts, Nil)
-    val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(parts))
-    val reduceRdd = new MyRDD(sc, parts, List(shuffleDep), tracker = mapOutputTracker)
-    submit(reduceRdd, (0 until parts).toArray)
-    assert(taskSets.length == 1)
-
-    // Finish the first task of the shuffle map stage.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(0), Success, makeMapStatus("hostA", 4),
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(0)))
-
-    // The second task of the shuffle map stage failed with FetchFailed.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(1),
-      FetchFailed(makeBlockManagerId("hostB"), shuffleDep.shuffleId, 0, 0, "ignored"),
-      null))
-
-    scheduler.resubmitFailedStages()
-    assert(taskSets.length == 2)
-    // The first partition has completed already, so the new attempt only need to run 3 tasks.
-    assert(taskSets(1).tasks.length == 3)
-
-    // Finish the first task of the second attempt of the shuffle map stage.
-    runEvent(makeCompletionEvent(
-      taskSets(1).tasks(0), Success, makeMapStatus("hostA", 4),
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(0)))
-
-    // Finish the third task of the first attempt of the shuffle map stage.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(2), Success, makeMapStatus("hostA", 4),
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(0)))
-    assert(tasksMarkedAsCompleted.length == 1)
-    assert(tasksMarkedAsCompleted.head.partitionId == 2)
-
-    // Finish the forth task of the first attempt of the shuffle map stage.
-    runEvent(makeCompletionEvent(
-      taskSets(0).tasks(3), Success, makeMapStatus("hostA", 4),
-      Seq.empty, Array.empty, createFakeTaskInfoWithId(0)))
-    assert(tasksMarkedAsCompleted.length == 2)
-    assert(tasksMarkedAsCompleted.last.partitionId == 3)
-
-    // Now the shuffle map stage is completed, and the next stage is submitted.
-    assert(taskSets.length == 3)
-
-    // Finish
-    complete(taskSets(2), Seq((Success, 42), (Success, 42), (Success, 42), (Success, 42)))
-    assertDataStructuresEmpty()
+    sc.setCheckpointDir(Utils.createTempDir().getCanonicalPath)
+    val shuffleMapRdd = new MyCheckpointRDD(sc, 2, Nil, indeterminate = true)
+    shuffleMapRdd.checkpoint()
+    assertResultStageFailToRollback(shuffleMapRdd)
   }
 
   /**
@@ -2961,13 +2519,13 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
   // OutputCommitCoordinator requires the task info itself to not be null.
   private def createFakeTaskInfo(): TaskInfo = {
     val info = new TaskInfo(0, 0, 0, 0L, "", "", TaskLocality.ANY, false)
-    info.finishTime = 1
+    info.finishTime = 1  // to prevent spurious errors in JobProgressListener
     info
   }
 
   private def createFakeTaskInfoWithId(taskId: Long): TaskInfo = {
     val info = new TaskInfo(taskId, 0, 0, 0L, "", "", TaskLocality.ANY, false)
-    info.finishTime = 1
+    info.finishTime = 1  // to prevent spurious errors in JobProgressListener
     info
   }
 
@@ -2976,15 +2534,13 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
       reason: TaskEndReason,
       result: Any,
       extraAccumUpdates: Seq[AccumulatorV2[_, _]] = Seq.empty,
-      metricPeaks: Array[Long] = Array.empty,
       taskInfo: TaskInfo = createFakeTaskInfo()): CompletionEvent = {
     val accumUpdates = reason match {
       case Success => task.metrics.accumulators()
       case ef: ExceptionFailure => ef.accums
-      case tk: TaskKilled => tk.accums
       case _ => Seq.empty
     }
-    CompletionEvent(task, reason, result, accumUpdates ++ extraAccumUpdates, metricPeaks, taskInfo)
+    CompletionEvent(task, reason, result, accumUpdates ++ extraAccumUpdates, taskInfo)
   }
 }
 
@@ -2994,8 +2550,4 @@ object DAGSchedulerSuite {
 
   def makeBlockManagerId(host: String): BlockManagerId =
     BlockManagerId("exec-" + host, host, 12345)
-}
-
-object FailThisAttempt {
-  val _fail = new AtomicBoolean(true)
 }

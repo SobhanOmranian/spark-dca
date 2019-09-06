@@ -19,55 +19,54 @@ package org.apache.spark.sql.execution.streaming.state
 
 import java.io.File
 import java.nio.file.Files
-import java.util.UUID
 
 import scala.util.Random
 
 import org.scalatest.{BeforeAndAfter, BeforeAndAfterAll}
+import org.scalatest.concurrent.Eventually._
+import org.scalatest.time.SpanSugar._
 
 import org.apache.spark.{SparkConf, SparkContext, SparkFunSuite}
+import org.apache.spark.sql.LocalSparkSession._
+import org.apache.spark.LocalSparkContext._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.ExecutorCacheTaskLocation
-import org.apache.spark.sql.LocalSparkSession._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.util.quietly
-import org.apache.spark.sql.execution.streaming.StatefulOperatorStateInfo
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 import org.apache.spark.util.{CompletionIterator, Utils}
 
 class StateStoreRDDSuite extends SparkFunSuite with BeforeAndAfter with BeforeAndAfterAll {
 
-  import StateStoreTestsHelper._
-
   private val sparkConf = new SparkConf().setMaster("local").setAppName(this.getClass.getSimpleName)
-  private val tempDir = Files.createTempDirectory("StateStoreRDDSuite").toString
+  private var tempDir = Files.createTempDirectory("StateStoreRDDSuite").toString
   private val keySchema = StructType(Seq(StructField("key", StringType, true)))
   private val valueSchema = StructType(Seq(StructField("value", IntegerType, true)))
+
+  import StateStoreSuite._
 
   after {
     StateStore.stop()
   }
 
   override def afterAll(): Unit = {
-    try {
-      super.afterAll()
-    } finally {
-      Utils.deleteRecursively(new File(tempDir))
-    }
+    super.afterAll()
+    Utils.deleteRecursively(new File(tempDir))
   }
 
   test("versioning and immutability") {
     withSparkSession(SparkSession.builder.config(sparkConf).getOrCreate()) { spark =>
-      val path = Utils.createDirectory(tempDir, Random.nextFloat.toString).toString
-      val rdd1 = makeRDD(spark.sparkContext, Seq("a", "b", "a")).mapPartitionsWithStateStore(
-            spark.sqlContext, operatorStateInfo(path, version = 0), keySchema, valueSchema, None)(
+      val path = Utils.createDirectory(tempDir, Random.nextString(10)).toString
+      val opId = 0
+      val rdd1 =
+        makeRDD(spark.sparkContext, Seq("a", "b", "a")).mapPartitionsWithStateStore(
+            spark.sqlContext, path, opId, storeVersion = 0, keySchema, valueSchema)(
             increment)
       assert(rdd1.collect().toSet === Set("a" -> 2, "b" -> 1))
 
       // Generate next version of stores
       val rdd2 = makeRDD(spark.sparkContext, Seq("a", "c")).mapPartitionsWithStateStore(
-        spark.sqlContext, operatorStateInfo(path, version = 1), keySchema, valueSchema, None)(
-        increment)
+        spark.sqlContext, path, opId, storeVersion = 1, keySchema, valueSchema)(increment)
       assert(rdd2.collect().toSet === Set("a" -> 3, "b" -> 1, "c" -> 1))
 
       // Make sure the previous RDD still has the same data.
@@ -76,7 +75,8 @@ class StateStoreRDDSuite extends SparkFunSuite with BeforeAndAfter with BeforeAn
   }
 
   test("recovering from files") {
-    val path = Utils.createDirectory(tempDir, Random.nextFloat.toString).toString
+    val opId = 0
+    val path = Utils.createDirectory(tempDir, Random.nextString(10)).toString
 
     def makeStoreRDD(
         spark: SparkSession,
@@ -84,8 +84,7 @@ class StateStoreRDDSuite extends SparkFunSuite with BeforeAndAfter with BeforeAn
         storeVersion: Int): RDD[(String, Int)] = {
       implicit val sqlContext = spark.sqlContext
       makeRDD(spark.sparkContext, Seq("a")).mapPartitionsWithStateStore(
-        sqlContext, operatorStateInfo(path, version = storeVersion),
-        keySchema, valueSchema, None)(increment)
+        sqlContext, path, opId, storeVersion, keySchema, valueSchema)(increment)
     }
 
     // Generate RDDs and state store data
@@ -104,14 +103,14 @@ class StateStoreRDDSuite extends SparkFunSuite with BeforeAndAfter with BeforeAn
   test("usage with iterators - only gets and only puts") {
     withSparkSession(SparkSession.builder.config(sparkConf).getOrCreate()) { spark =>
       implicit val sqlContext = spark.sqlContext
-      val path = Utils.createDirectory(tempDir, Random.nextFloat.toString).toString
+      val path = Utils.createDirectory(tempDir, Random.nextString(10)).toString
       val opId = 0
 
       // Returns an iterator of the incremented value made into the store
       def iteratorOfPuts(store: StateStore, iter: Iterator[String]): Iterator[(String, Int)] = {
         val resIterator = iter.map { s =>
           val key = stringToRow(s)
-          val oldValue = Option(store.get(key)).map(rowToInt).getOrElse(0)
+          val oldValue = store.get(key).map(rowToInt).getOrElse(0)
           val newValue = oldValue + 1
           store.put(key, intToRow(newValue))
           (s, newValue)
@@ -126,49 +125,42 @@ class StateStoreRDDSuite extends SparkFunSuite with BeforeAndAfter with BeforeAn
           iter: Iterator[String]): Iterator[(String, Option[Int])] = {
         iter.map { s =>
           val key = stringToRow(s)
-          val value = Option(store.get(key)).map(rowToInt)
+          val value = store.get(key).map(rowToInt)
           (s, value)
         }
       }
 
       val rddOfGets1 = makeRDD(spark.sparkContext, Seq("a", "b", "c")).mapPartitionsWithStateStore(
-        spark.sqlContext, operatorStateInfo(path, version = 0), keySchema, valueSchema, None)(
-        iteratorOfGets)
+        spark.sqlContext, path, opId, storeVersion = 0, keySchema, valueSchema)(iteratorOfGets)
       assert(rddOfGets1.collect().toSet === Set("a" -> None, "b" -> None, "c" -> None))
 
       val rddOfPuts = makeRDD(spark.sparkContext, Seq("a", "b", "a")).mapPartitionsWithStateStore(
-        sqlContext, operatorStateInfo(path, version = 0), keySchema, valueSchema, None)(
-        iteratorOfPuts)
+        sqlContext, path, opId, storeVersion = 0, keySchema, valueSchema)(iteratorOfPuts)
       assert(rddOfPuts.collect().toSet === Set("a" -> 1, "a" -> 2, "b" -> 1))
 
       val rddOfGets2 = makeRDD(spark.sparkContext, Seq("a", "b", "c")).mapPartitionsWithStateStore(
-        sqlContext, operatorStateInfo(path, version = 1), keySchema, valueSchema, None)(
-        iteratorOfGets)
+        sqlContext, path, opId, storeVersion = 1, keySchema, valueSchema)(iteratorOfGets)
       assert(rddOfGets2.collect().toSet === Set("a" -> Some(2), "b" -> Some(1), "c" -> None))
     }
   }
 
   test("preferred locations using StateStoreCoordinator") {
     quietly {
-      val queryRunId = UUID.randomUUID
       val opId = 0
-      val path = Utils.createDirectory(tempDir, Random.nextFloat.toString).toString
+      val path = Utils.createDirectory(tempDir, Random.nextString(10)).toString
 
       withSparkSession(SparkSession.builder.config(sparkConf).getOrCreate()) { spark =>
         implicit val sqlContext = spark.sqlContext
         val coordinatorRef = sqlContext.streams.stateStoreCoordinator
-        val storeProviderId1 = StateStoreProviderId(StateStoreId(path, opId, 0), queryRunId)
-        val storeProviderId2 = StateStoreProviderId(StateStoreId(path, opId, 1), queryRunId)
-        coordinatorRef.reportActiveInstance(storeProviderId1, "host1", "exec1")
-        coordinatorRef.reportActiveInstance(storeProviderId2, "host2", "exec2")
+        coordinatorRef.reportActiveInstance(StateStoreId(path, opId, 0), "host1", "exec1")
+        coordinatorRef.reportActiveInstance(StateStoreId(path, opId, 1), "host2", "exec2")
 
-        require(
-          coordinatorRef.getLocation(storeProviderId1) ===
+        assert(
+          coordinatorRef.getLocation(StateStoreId(path, opId, 0)) ===
             Some(ExecutorCacheTaskLocation("host1", "exec1").toString))
 
         val rdd = makeRDD(spark.sparkContext, Seq("a", "b", "a")).mapPartitionsWithStateStore(
-          sqlContext, operatorStateInfo(path, queryRunId = queryRunId),
-          keySchema, valueSchema, None)(increment)
+          sqlContext, path, opId, storeVersion = 0, keySchema, valueSchema)(increment)
         require(rdd.partitions.length === 2)
 
         assert(
@@ -192,15 +184,15 @@ class StateStoreRDDSuite extends SparkFunSuite with BeforeAndAfter with BeforeAn
           .config(sparkConf.setMaster("local-cluster[2, 1, 1024]"))
           .getOrCreate()) { spark =>
         implicit val sqlContext = spark.sqlContext
-        val path = Utils.createDirectory(tempDir, Random.nextFloat.toString).toString
+        val path = Utils.createDirectory(tempDir, Random.nextString(10)).toString
         val opId = 0
         val rdd1 = makeRDD(spark.sparkContext, Seq("a", "b", "a")).mapPartitionsWithStateStore(
-          sqlContext, operatorStateInfo(path, version = 0), keySchema, valueSchema, None)(increment)
+          sqlContext, path, opId, storeVersion = 0, keySchema, valueSchema)(increment)
         assert(rdd1.collect().toSet === Set("a" -> 2, "b" -> 1))
 
         // Generate next version of stores
         val rdd2 = makeRDD(spark.sparkContext, Seq("a", "c")).mapPartitionsWithStateStore(
-          sqlContext, operatorStateInfo(path, version = 1), keySchema, valueSchema, None)(increment)
+          sqlContext, path, opId, storeVersion = 1, keySchema, valueSchema)(increment)
         assert(rdd2.collect().toSet === Set("a" -> 3, "b" -> 1, "c" -> 1))
 
         // Make sure the previous RDD still has the same data.
@@ -213,17 +205,10 @@ class StateStoreRDDSuite extends SparkFunSuite with BeforeAndAfter with BeforeAn
     sc.makeRDD(seq, 2).groupBy(x => x).flatMap(_._2)
   }
 
-  private def operatorStateInfo(
-      path: String,
-      queryRunId: UUID = UUID.randomUUID,
-      version: Int = 0): StatefulOperatorStateInfo = {
-    StatefulOperatorStateInfo(path, queryRunId, operatorId = 0, version, numPartitions = 5)
-  }
-
   private val increment = (store: StateStore, iter: Iterator[String]) => {
     iter.foreach { s =>
       val key = stringToRow(s)
-      val oldValue = Option(store.get(key)).map(rowToInt).getOrElse(0)
+      val oldValue = store.get(key).map(rowToInt).getOrElse(0)
       store.put(key, intToRow(oldValue + 1))
     }
     store.commit()

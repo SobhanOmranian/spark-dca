@@ -40,7 +40,7 @@ public final class StreamResponse extends AbstractResponseMessage {
   }
 
   @Override
-  public Message.Type type() { return Type.StreamResponse; }
+  public Type type() { return Type.StreamResponse; }
 
   @Override
   public int encodedLength() {
@@ -67,7 +67,7 @@ public final class StreamResponse extends AbstractResponseMessage {
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(byteCount, streamId);
+    return Objects.hashCode(byteCount, streamId, body());
   }
 
   @Override

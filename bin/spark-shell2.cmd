@@ -20,13 +20,7 @@ rem
 rem Figure out where the Spark framework is installed
 call "%~dp0find-spark-home.cmd"
 
-set LF=^
-
-
-rem two empty lines are required
-set _SPARK_CMD_USAGE=Usage: .\bin\spark-shell.cmd [options]^%LF%%LF%^%LF%%LF%^
-Scala REPL options:^%LF%%LF%^
-  -I ^<file^>                   preload ^<file^>, enforcing line-by-line interpretation
+set _SPARK_CMD_USAGE=Usage: .\bin\spark-shell.cmd [options]
 
 rem SPARK-4161: scala does not assume use of the java classpath,
 rem so we need to add the "-Dscala.usejavacp=true" flag manually. We

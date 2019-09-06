@@ -155,7 +155,7 @@ object MovieLensALS {
     val numTest = test.count()
     println(s"Training: $numTraining, test: $numTest.")
 
-    ratings.unpersist()
+    ratings.unpersist(blocking = false)
 
     val model = new ALS()
       .setRank(params.rank)

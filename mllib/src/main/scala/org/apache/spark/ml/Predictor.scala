@@ -204,8 +204,8 @@ abstract class PredictionModel[FeaturesType, M <: PredictionModel[FeaturesType, 
     if ($(predictionCol).nonEmpty) {
       transformImpl(dataset)
     } else {
-      this.logWarning(s"$uid: Predictor.transform() does nothing" +
-        " because no output columns were set.")
+      this.logWarning(s"$uid: Predictor.transform() was called as NOOP" +
+        " since no output columns were set.")
       dataset.toDF
     }
   }
@@ -219,8 +219,7 @@ abstract class PredictionModel[FeaturesType, M <: PredictionModel[FeaturesType, 
 
   /**
    * Predict label for the given features.
-   * This method is used to implement `transform()` and output [[predictionCol]].
+   * This internal method is used to implement `transform()` and output [[predictionCol]].
    */
-  @Since("2.4.0")
-  def predict(features: FeaturesType): Double
+  protected def predict(features: FeaturesType): Double
 }
