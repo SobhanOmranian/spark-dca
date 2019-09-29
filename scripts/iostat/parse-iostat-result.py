@@ -13,13 +13,16 @@ from api import *
 parser = ArgumentParser()
 parser.add_argument("-i", "--inputFile")
 parser.add_argument("-o", "--outputFile")
+parser.add_argument("-a", "--appName")
 
 args = parser.parse_args(sys.argv[1:])
 
 inputFileName = args.inputFile
 outputFileName = args.outputFile
+appName = args.appName
 
 data = pd.read_csv(inputFileName, index_col="stage")
+data = data[data['appName'] == appName]
 appName = str(data["appName"].values[0])
 appId = appName.split("^", 1)[1]
 
@@ -45,6 +48,8 @@ average_df = average_df.reset_index()
 cols = average_df.columns.tolist()
 cols.insert(0, cols.pop(cols.index('appName')))
 average_df = average_df.reindex(columns = cols)
+print("average_df:")
+print(average_df)
 
 def writeToOutput(data):
     global fileNameWithoutExtension

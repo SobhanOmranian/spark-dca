@@ -285,7 +285,7 @@ sub runExperimentTimes {
         savePioResult();
         saveMpstatResult();
         #saveMemstallResult();
-        saveIostatResult();
+        saveIostatResult(getFullAppNameFromFileName());
         sleep(3);
         saveDcaResult(getFullAppNameFromFileName(), $adaptiveThreadPool, $cores * ($numberOfNodes * $numberOfExecutors));
         # static mode and default

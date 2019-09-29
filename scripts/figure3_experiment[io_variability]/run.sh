@@ -25,7 +25,7 @@ do
 #         fi
         NODE_NUM=$node
         echo $NODE_NUM
-        ssh $NODE_NUM 'sudo /cm/shared/package/utils/bin/drop_caches'
+        ssh $NODE_NUM '$SPARK_HOME/scripts/common/spark/clear_buffer_cache.sh'
 
         SECONDS=0
 
@@ -34,7 +34,7 @@ do
 
         WRITE_TIME=$SECONDS
 
-        ssh $NODE_NUM 'sudo /cm/shared/package/utils/bin/drop_caches'
+        ssh $NODE_NUM '$SPARK_HOME/scripts/common/spark/clear_buffer_cache.sh'
 
         #BLOCK_NUM=
         INPUT_SIZE=$( ssh $NODE_NUM "stat --format %s $INFILE"  )

@@ -31,9 +31,14 @@ public abstract class Tuner {
 	private AtomicBoolean tuningFinished = new AtomicBoolean(false);
 
 	public MyThreadPoolExecutor threadPool;
+	Boolean isStatic = false;
 
 	public Tuner() {
-
+		String isStaticEnv = System.getenv("SPARK_DCA_STATIC");
+		if (isStaticEnv != null) {
+			log.debug("[DCA-CONFIG] [UPDATE-SCHEDULER]: Enabled!");
+			isStatic = isStaticEnv.equals("1");
+		}
 	}
 
 	public int report(int stageId) {
@@ -63,13 +68,7 @@ public abstract class Tuner {
 				ioStatFilePath = threadPool.executor.getIoStatPath();
 			}
 			
-			String isStaticEnv = System.getenv("SPARK_DCA_STATIC");
-			Boolean isStatic = false;
 
-			if (isStaticEnv != null) {
-				log.debug("[DCA-CONFIG] [UPDATE-SCHEDULER]: Enabled!");
-				isStatic = isStaticEnv.equals("1");
-			}
 
 			log.info(String.format("Adding task %s to threadpool queue (i.e., execute())", taskRunner.taskId()));
 			if (threadPool.getCurrentStage() != taskRunner.getStageId() && isTuningFinished() == false && !isStatic) {
@@ -83,7 +82,7 @@ public abstract class Tuner {
 	}
 	
 	public void shutdown() {
-		if(isTuningFinished() == false && threadPool.getMaximumPoolSize() != Integer.MAX_VALUE)
+		if(isTuningFinished() == false && threadPool.getMaximumPoolSize() != Integer.MAX_VALUE && !isStatic)
 			report(threadPool.getCurrentStage());
 		dcaOutputWriter.close();
 	}

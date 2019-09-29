@@ -1,4 +1,11 @@
 numberOfTimes=$1
 
-# dynamic
+# terasort (dynamic)
 ../common/spark/run_terasort.pl 14 $numberOfTimes 0 32 1
+
+# hibench (dynamic)
+../common/spark/run_hibench.pl sql aggregation gigantic run 14 $numberOfTimes 0 32 1
+
+../common/spark/run_hibench.pl sql join gigantic run 14 $numberOfTimes 0 32 1
+
+../common/spark/run_hibench.pl websearch pagerank large run 14 $numberOfTimes 0 32 1
