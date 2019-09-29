@@ -500,7 +500,6 @@ private[spark] class TaskSetManager(
         val taskName = s"task ${info.id} in stage ${taskSet.id}"
         logInfo(s"Starting $taskName (TID $taskId, $host, executor ${info.executorId}, " +
           s"partition ${task.partitionId}, $taskLocality, ${serializedTask.limit} bytes)")
-
         sched.dagScheduler.taskStarted(task, info)
         
         new TaskDescription(
@@ -514,7 +513,8 @@ private[spark] class TaskSetManager(
           task.localProperties,
           serializedTask,
           taskSet.stageId,
-          sched.sc.applicationId)
+          sched.sc.applicationId,
+          taskSet.isIo)
       }
     } else {
       None

@@ -17,9 +17,23 @@ import org.apache.spark.executor.Executor.TaskRunner;
 public class SelfAdaptiveNoActionPoolExecutor extends MyThreadPoolExecutor {
 
 	private final static Logger log = Logger.getLogger("SelfAdaptiveNoActionPoolExecutor");
+	private FixedAdaptiveTuner tuner;
 	
 	public SelfAdaptiveNoActionPoolExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
 			BlockingQueue<Runnable> workQueue, ThreadFactory threadFactory, Executor executor) {
 		super(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue, threadFactory, executor);
+		
+		this.tuner = new FixedAdaptiveTuner(this);
+	}
+	
+	public void saveDca(int stageId, String finalAppName) {
+		tuner.reportNonIo(stageId, finalAppName);
+		executor.addReportedStage(stageId);
+	}
+	
+	@Override
+	public void shutdown() {
+		tuner.shutdown();
+		super.shutdown();
 	}
 }

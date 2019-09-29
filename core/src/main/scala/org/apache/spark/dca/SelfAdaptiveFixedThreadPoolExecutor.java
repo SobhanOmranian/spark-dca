@@ -10,7 +10,6 @@ import org.apache.log4j.Logger;
 import org.apache.spark.dca.builder.AdaptiveTunerBuilder;
 import org.apache.spark.dca.strace.NoStraceReader;
 import org.apache.spark.executor.Executor;
-import org.apache.spark.executor.Executor.TaskRunner;
 
 public class SelfAdaptiveFixedThreadPoolExecutor extends MyThreadPoolExecutor {
 
@@ -36,8 +35,21 @@ public class SelfAdaptiveFixedThreadPoolExecutor extends MyThreadPoolExecutor {
 
 	}
 	
-	public void saveDca(int stageId) {
-		((FixedAdaptiveTuner)tuner).reportNonIo(stageId);
+	public void saveDca(int stageId, String finalAppName) {
+		((FixedAdaptiveTuner)tuner).reportNonIo(stageId, finalAppName);
+		executor.addReportedStage(stageId);
+	}
+	
+	public void saveDcaIo(int stageId, String finalAppName) {
+		((FixedAdaptiveTuner)tuner).reportIo(stageId, finalAppName);
+		executor.addReportedStage(stageId);
+	}
+	
+	
+	@Override
+	public void shutdown() {
+		tuner.shutdown();
+		super.shutdown();
 	}
 
 }

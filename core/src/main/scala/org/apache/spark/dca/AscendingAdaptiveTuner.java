@@ -45,7 +45,12 @@ public class AscendingAdaptiveTuner extends AdaptiveTuner {
 				float currentValue = currentMonitoringResult.get(index);
 				float previousValue = previousMonitoringResult.get(index);
 				
-				Boolean shouldRevert = true;
+				
+				String shouldRevertString = System.getenv("SPARK_DCA_SHOULD_REVERT");
+				if (shouldRevertString == null)
+					shouldRevertString = "1";
+				
+				Boolean shouldRevert = Boolean.valueOf(shouldRevertString);
 
 				log.info(String.format(
 						"[Skip]: currentTotalTaskThroughputFromSampling[%s]: %s, previousTotalTaskThroughputFromSampling[%s]: %s",

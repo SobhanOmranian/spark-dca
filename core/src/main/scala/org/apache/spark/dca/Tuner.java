@@ -52,16 +52,27 @@ public abstract class Tuner {
 				executorId = taskRunner.getExecutorId();
 				String finalName = appName + "-" + appId + "#" + executorId;
 				
-				dcaOutputWriter = new DcaResultOutputWriter(finalName);
+				log.info(
+						String.format("Initializing dcaOutputWriter..."));
+				if (dcaOutputWriter == null)
+					dcaOutputWriter = new DcaResultOutputWriter(finalName);
 				taskFinishOutputWriter = new TaskFinishOutputWriter(finalName);
 
 				// Save strace and iostat file paths
 				straceReader.setLogPath(threadPool.executor.getStracePath());
 				ioStatFilePath = threadPool.executor.getIoStatPath();
 			}
+			
+			String isStaticEnv = System.getenv("SPARK_DCA_STATIC");
+			Boolean isStatic = false;
+
+			if (isStaticEnv != null) {
+				log.debug("[DCA-CONFIG] [UPDATE-SCHEDULER]: Enabled!");
+				isStatic = isStaticEnv.equals("1");
+			}
 
 			log.info(String.format("Adding task %s to threadpool queue (i.e., execute())", taskRunner.taskId()));
-			if (threadPool.getCurrentStage() != taskRunner.getStageId() && isTuningFinished() == false) {
+			if (threadPool.getCurrentStage() != taskRunner.getStageId() && isTuningFinished() == false && !isStatic) {
 				log.info(
 						String.format("Stage has changed from %s to %s detected in TUNER and tuning is not finished, saving whatever we have...",
 								threadPool.getCurrentStage(), taskRunner.getStageId()));
@@ -72,7 +83,7 @@ public abstract class Tuner {
 	}
 	
 	public void shutdown() {
-		if(isTuningFinished() == false)
+		if(isTuningFinished() == false && threadPool.getMaximumPoolSize() != Integer.MAX_VALUE)
 			report(threadPool.getCurrentStage());
 		dcaOutputWriter.close();
 	}

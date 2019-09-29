@@ -294,7 +294,7 @@ private[spark] class TaskSchedulerImpl private[scheduler] (
       val host = shuffledOffers(i).host
       if (availableCpus(i) >= CPUS_PER_TASK) {
         try {
-          for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
+          for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {            
             task.isIo = isIo;
             tasks(i) += task
             val tid = task.taskId
@@ -357,7 +357,6 @@ private[spark] class TaskSchedulerImpl private[scheduler] (
       }
     }.getOrElse(offers)
 
-    val ioParallelism = Option(System.getenv("SPARK_DCA_PARALLELISM")).getOrElse("0").toInt
     val staticDca = Option(System.getenv("SPARK_DCA_STATIC")).getOrElse("0").toInt
     var isIo = false;
     val sortedTaskSets = rootPool.getSortedTaskSetQueue
@@ -367,9 +366,7 @@ private[spark] class TaskSchedulerImpl private[scheduler] (
       if (newExecAvail) {
         taskSet.executorAdded()
       }
-
       if (isUpdateSchedulerEnabled == 1) {
-
         if (staticDca == 1) {
           if (taskSet.taskSet.isIo) {
             isIo = true
@@ -437,7 +434,6 @@ private[spark] class TaskSchedulerImpl private[scheduler] (
       var launchedTaskAtCurrentMaxLocality = false
       for (currentMaxLocality <- taskSet.myLocalityLevels) {
         do {
-//          logInfo(s"[CRITICAL] IS IO: $isIo")
           launchedTaskAtCurrentMaxLocality = resourceOfferSingleTaskSet(
             taskSet, currentMaxLocality, shuffledOffers, availableCpus, tasks, isIo)
           launchedAnyTask |= launchedTaskAtCurrentMaxLocality

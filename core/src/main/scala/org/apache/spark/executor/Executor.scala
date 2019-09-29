@@ -46,6 +46,7 @@ import org.apache.spark.util.io.ChunkedByteBuffer
 import org.apache.spark.dca.SelfAdaptiveFixedThreadPoolExecutor
 import org.apache.spark.dca.SelfAdaptiveNoActionPoolExecutor
 import org.apache.spark.dca.SelfAdaptiveStaticThreadPoolExecutor
+import org.apache.spark.dca.MyThreadPoolExecutor
 
 /**
  * Spark executor, backed by a threadpool to run tasks.
@@ -77,6 +78,10 @@ class Executor(
   private val EMPTY_BYTE_BUFFER = ByteBuffer.wrap(new Array[Byte](0))
 
   private val conf = env.conf
+  
+  val reportedStages : ArrayBuffer[Integer] = new ArrayBuffer[Integer]()
+  
+
 
   //  private var executorBackend: ExecutorBackend = null
 
@@ -99,10 +104,11 @@ class Executor(
   private var numberOfLaunchedTasks = 0;
 
   val adaptiveThreadPool = Option(System.getenv("SPARK_ADAPTIVE_THREADPOOL")).getOrElse("0").toInt
+  val SPARK_HOME = Option(System.getenv("SPARK_HOME")).getOrElse("/home/omranian/scripts")
+  val SCRIPT_HOME = s"$SPARK_HOME/scripts"
   println("adaptiveThreadPool: " + adaptiveThreadPool)
-  
- val originalCores: Int = cores
-  //  val tmpfsEnabled = Option(System.getenv("SPARK_DCA_TMPFS")).getOrElse("0").toInt
+
+  val originalCores: Int = cores
   val tmpfsEnabled = 1
 
   val attachStraceEnabled = Option(System.getenv("SPARK_DCA_STRACE")).getOrElse("0").toInt
@@ -148,16 +154,16 @@ class Executor(
       .build()
 
     if (staticDca == 1) {
-        new SelfAdaptiveFixedThreadPoolExecutor(
-            staticDcaThreadNum,
-            staticDcaThreadNum,
-            60L,
-            TimeUnit.SECONDS,
-            new LinkedBlockingQueue[Runnable](),
-            threadFactory,
-            adaptiveThreadPool,
-            this)
-            .asInstanceOf[ThreadPoolExecutor]
+      new SelfAdaptiveFixedThreadPoolExecutor(
+        staticDcaThreadNum,
+        staticDcaThreadNum,
+        60L,
+        TimeUnit.SECONDS,
+        new LinkedBlockingQueue[Runnable](),
+        threadFactory,
+        adaptiveThreadPool,
+        this)
+        .asInstanceOf[ThreadPoolExecutor]
     } else {
       if (adaptiveThreadPool >= 1) {
         if (adaptiveThreadPool == 100)
@@ -192,21 +198,21 @@ class Executor(
             threadFactory,
             adaptiveThreadPool, this)
             .asInstanceOf[ThreadPoolExecutor]
-        //    else if (adaptiveThreadPool == 5)
-        //      new ThreadPoolExecutor(8, 8,
-        //        60L, TimeUnit.SECONDS,
-        //        new LinkedBlockingQueue[Runnable](),
-        //        threadFactory);
       } else
         Executors.newCachedThreadPool(threadFactory).asInstanceOf[ThreadPoolExecutor]
     }
   }
+  
+  def addReportedStage (stageId: Integer): Int = {
+    reportedStages += stageId
+    1
+  }
+  
+  def isStageReported (stageId: Integer): Boolean = {
+    reportedStages.contains(stageId)
+  }
 
   def sendThreadPoolUpdateMsg(newCoreNum: Int) {
-    //    if (staticDca == 1) {
-    //      if (stageId == 0)
-    //        return
-    //    }
     if (this.executorBackEnd != null) {
       logInfo(s"[MSG]: sending new threadpool core [$newCoreNum] from Executor to ExecutorBackend...")
       this.executorBackEnd.threadpoolUpdate(newCoreNum);
@@ -248,7 +254,7 @@ class Executor(
 
     var stracePath = ""
     if (tmpfsEnabled == 1) {
-      stracePath = s"/dev/shm/omranian/log.strace"
+      stracePath = s"/dev/shm/log.strace"
 
     } else {
       val rootDir = Utils.getConfiguredLocalDirs(conf).mkString(" ");
@@ -256,7 +262,6 @@ class Executor(
       stracePath = s"$rootDir/log.strace"
     }
 
-    //    return ""
     return stracePath
   }
 
@@ -264,7 +269,7 @@ class Executor(
 
     var ioStatPath = ""
     if (tmpfsEnabled == 1) {
-      ioStatPath = s"/dev/shm/omranian/iostat.csv"
+      ioStatPath = s"/dev/shm/iostat.csv"
 
     } else {
       val rootDir = Utils.getConfiguredLocalDirs(conf).mkString(" ");
@@ -300,23 +305,13 @@ class Executor(
     val r = new Runnable {
       override def run() = {
         try {
-          //          println(s"rootDir: somthing")
-          //          Utils.getConfiguredLocalDirs(conf).flatMap { rootDir =>
-          //
-          //          }
-
           var stracePath = getStracePath
-
-          //          stracePath = "/home/omranian/log.strace"
-          //          val cmd = s"strace -f -tt -T -e trace=epoll_wait -o $stracePath -p $pid"
           val cmd = s"strace -f -tt -T -e trace=lseek -o $stracePath -p $pid"
-          //                    val cmd = s"cat /proc/$pid/stat"
           import scala.sys.process._
           Process(cmd)!
 
-          //          writeEpollWait(stracePath, "359.99")
         } catch {
-          case t: Throwable => t.printStackTrace() // TODO: handle error
+          case t: Throwable => t.printStackTrace()
         }
       }
     }
@@ -347,19 +342,12 @@ class Executor(
     val r = new Runnable {
       override def run() = {
         try {
-          //          stracePath = "/home/omranian/log.strace"
-          //          val cmd = s"strace -f -tt -T -e trace=epoll_wait -p $pid W| python3 /home/omranian/parser.py"
-
-          //          val cmd = s"strace -f -tt -T -e trace=epoll_wait -p $pid" #| s"python3 /home/omranian/parser.py"
-          //          import scala.sys.process._
-          //          val cmd = s"strace -f -tt -T -e trace=epoll_wait -p $pid 2>&1" #| s"python3 /home/omranian/parser.py"
-
           val r = Seq("/bin/sh", "-c", s"strace -f -tt -T -e trace=epoll_wait -p $pid 2>&1 | python3 /home/omranian/parser.py");
 
           import scala.sys.process._
           Process(r).!
         } catch {
-          case t: Throwable => t.printStackTrace() // TODO: handle error
+          case t: Throwable => t.printStackTrace()
         }
       }
     }
@@ -397,7 +385,7 @@ class Executor(
           val appId = getAppId()
           val completeName = q"$appName^$appId"
 
-          val r = Seq("/bin/sh", "-c", s"python3 /home/omranian/scripts/straceFileParser/strace_file_parser.py --appName $completeName  --file $stracePath");
+          val r = Seq("/bin/sh", "-c", s"python3 $SCRIPT_HOME/strace/strace_file_parser.py --appName $completeName  --file $stracePath");
 
           import scala.sys.process._
           Process(r).!
@@ -417,11 +405,9 @@ class Executor(
       override def run() = {
         try {
           var ioStatPath = getIoStatPath
-
-          //          val cmd = s"/var/scratch/omranian/git/iostat-csv/iostat-csv.sh | tee $ioStatPath > /dev/null &"
           import scala.sys.process._
           //          Process(cmd)!
-          val ret = "/var/scratch/omranian/git/iostat-csv/iostat-csv.sh" #| s"tee $ioStatPath > /dev/null &" !
+          val ret = s"$SCRIPT_HOME/iostat/iostat_csv.sh" #| s"tee $ioStatPath > /dev/null &" !
         } catch {
           case t: Throwable => t.printStackTrace() // TODO: handle error
         }
@@ -468,7 +454,7 @@ class Executor(
           val execId = getExecutorId()
           log.info(s"[PIO] Starting pio on process [$pid], output file name: $outputFileName");
 
-          val r = Seq("/bin/sh", "-c", s"/home/omranian/scripts/io-activity/pio_executor_hdfs.sh $pid $outputFileName $completeName $execId");
+          val r = Seq("/bin/sh", "-c", s"$SCRIPT_HOME/table2_experiment[io_activity]/pio_executor_hdfs.sh $pid $outputFileName $completeName $execId");
 
           import scala.sys.process._
           Process(r).!
@@ -491,7 +477,7 @@ class Executor(
           val execId = getExecutorId()
           log.info(s"[MPSTAT] Starting mpstat 1, output file name: $completeName");
 
-          val r = Seq("/bin/sh", "-c", s"mpstat 1 | python3 /home/omranian/scripts/mpstat/parse-mpstat-output.py -e $execId -a $completeName -f $completeName");
+          val r = Seq("/bin/sh", "-c", s"mpstat 1 | python3 $SCRIPT_HOME/figure1_experiment[io_wait_time]/parse-mpstat-output.py -e $execId -a $completeName -f $completeName");
 
           import scala.sys.process._
           Process(r).!
@@ -513,7 +499,7 @@ class Executor(
           val completeName = q"$appName^$appId"
           log.info(s"[IOSTAT(M)] Starting iostat, output file name: $completeName");
 
-          val r = Seq("/bin/sh", "-c", s"iostat -c -d -t -x -y 1 | awk -f /home/omranian/scripts/iostat/buffer.awk | python3 /home/omranian/scripts/iostat/parse-iostat-output.py -a $completeName -f $completeName");
+          val r = Seq("/bin/sh", "-c", s"iostat -c -d -t -x -y 1 | awk -f $SCRIPT_HOME/iostat/buffer.awk | python3 $SCRIPT_HOME/iostat/parse-iostat-output.py -a $completeName -f $completeName -d sda -d sdb");
 
           import scala.sys.process._
           Process(r).!
@@ -538,7 +524,7 @@ class Executor(
 
           val pid = getPid()
 
-          val r = Seq("/bin/sh", "-c", s"top -b  -c -p $pid | python3 /home/omranian/scripts/top/parse-top-output.py -e $execId -a $completeName -f $completeName");
+          val r = Seq("/bin/sh", "-c", s"top -b  -c -p $pid | python3 $SCRIPT_HOME/figure1_experiment[io_wait_time]/parse-top-output.py -e $execId -a $completeName -f $completeName");
 
           import scala.sys.process._
           Process(r).!
@@ -574,37 +560,10 @@ class Executor(
 
   }
 
-  def startIoTop() {
-    val r = new Runnable {
-      override def run() = {
-        try {
-          var ioStatPath = getIoStatPath
-
-          //          val cmd = s"/var/scratch/omranian/git/iostat-csv/iostat-csv.sh | tee $ioStatPath > /dev/null &"
-          import scala.sys.process._
-          //          Process(cmd)!
-          val ret = "/var/scratch/omranian/git/iostat-csv/iostat-csv.sh" #| s"tee $ioStatPath > /dev/null &" !
-        } catch {
-          case t: Throwable => t.printStackTrace() // TODO: handle error
-        }
-      }
-    }
-    new Thread(r).start()
-
-  }
-
-  //  if (adaptiveThreadPool >= 1 && (adaptiveThreadPool != 100 || adaptiveThreadPool != 99)) {
-
-  //  if (attachStraceEnabled == 1) {
-  //    val pid = getPid()
-  //    attachStrace(pid);
-  //  }
-
   if (getIoStatPath != "") {
     println(s"Starting iostat...")
     startIoStat();
   }
-  //  }
 
   private val executorSource = new ExecutorSource(threadPool, executorId)
   private val executorSourceNoTuning = new ExecutorSource(threadPoolNoTuning, executorId)
@@ -621,8 +580,8 @@ class Executor(
 
   if (!isLocal) {
     env.metricsSystem.registerSource(executorSource)
-    if(staticDca == 1)
-        env.metricsSystem.registerSource(executorSourceNoTuning)
+    //    if (staticDca == 1)
+    //      env.metricsSystem.registerSource(executorSourceNoTuning)
     env.blockManager.initialize(conf.getAppId)
   }
 
@@ -683,6 +642,14 @@ class Executor(
   var isCurrentStageIo: Boolean = false
 
   def launchTask(context: ExecutorBackend, taskDescription: TaskDescription): Unit = {
+
+    def getFullAppName(tr: TaskRunner): String = {
+      val appName = sanitizeString(tr.getAppName());
+      val appId = tr.getAppId();
+      val executorId = tr.getExecutorId();
+      val finalName = appName + "-" + appId + "#" + executorId;
+      finalName
+    }
     //    numberOfLaunchedTasks += 1;
     //    val ioParallelism = Option(System.getenv("SPARK_DCA_PARALLELISM")).getOrElse("0").toInt
     ////    println(s"number of launched tasks: $numberOfLaunchedTasks")
@@ -698,25 +665,38 @@ class Executor(
       if (stageId != taskDescription.stageId) {
         logInfo("[CRITICAL] Stage change detected in Executor!")
         stageId = taskDescription.stageId
+        logInfo(s"[CRITICAL] taskDescription.isIo: ${taskDescription.isIo}")
+        val finalName = getFullAppName(tr)
         if (!taskDescription.isIo) {
+          logInfo("[CRITICAL] Manually letting the sockets know stage has changed it is not an IO phase!")
+          (threadPool.asInstanceOf[SelfAdaptiveFixedThreadPoolExecutor]).notifySockets(stageId);
           logInfo("[CRITICAL] Resetting the number of cores since it is not an IO phase!")
-          sendThreadPoolUpdateMsg(32)
+          sendThreadPoolUpdateMsg(cores)
           logInfo("[CRITICAL] Saving DCA results for this non-io stage!")
-          (threadPool.asInstanceOf[SelfAdaptiveFixedThreadPoolExecutor]).saveDca(stageId)
-        }
-        else {
+          (threadPool.asInstanceOf[SelfAdaptiveFixedThreadPoolExecutor]).saveDca(stageId, finalName)
+        } else {
           logInfo(s"[CRITICAL] Setting the number of cores in scheduler to $staticDcaThreadNum since it is an IO phase!")
           sendThreadPoolUpdateMsg(staticDcaThreadNum)
+          (threadPool.asInstanceOf[SelfAdaptiveFixedThreadPoolExecutor]).saveDcaIo(stageId, finalName)
         }
       }
 
       if (taskDescription.isIo) {
-
         threadPool.execute(tr)
-      } else
+      } else {
         threadPoolNoTuning.execute(tr)
+      }
 
     } else {
+      // if default mode, save dca.
+      if (stageId != taskDescription.stageId) {
+        stageId = taskDescription.stageId
+        logInfo("[CRITICAL] Stage change detected in Executor!")
+        if (adaptiveThreadPool == 100) {
+          val finalName = getFullAppName(tr)
+          (threadPool.asInstanceOf[SelfAdaptiveNoActionPoolExecutor]).saveDca(stageId, finalName)
+        }
+      }
       threadPool.execute(tr)
     }
 
@@ -922,7 +902,7 @@ class Executor(
         case t: Exception => return 0
       }
     }
-    
+
     def getGcTime(): Long = {
       try {
         task.metrics.jvmGCTime
